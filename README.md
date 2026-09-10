@@ -3,8 +3,15 @@
 **A simulation gate for agent writes.** Nothing reaches a real system without a
 proven diff, a policy check, and a rollback receipt.
 
+**[Live demo](https://preflight-dun.vercel.app)** ·
+**[Repo](https://github.com/morto9/preflight)**
+
 Built for the [Simulate Before You Act](https://build.doo.ooo/challenges/simulate-before-act)
 challenge.
+
+> The demo gives every visitor their own sandbox with its own real Stripe test
+> charges, so several people can use it at once without colliding. Provisioning
+> takes a few seconds on first load because those charges are genuinely created.
 
 ---
 
