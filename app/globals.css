@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+/*
+  A diff-centric operations tool. The palette does one job above all: make the
+  difference between PROVEN and PREDICTED legible at a glance, because that
+  distinction is the whole argument of this product.
+*/
+@theme {
+  --color-ground: #0b0f14;
+  --color-panel: #121820;
+  --color-panel-2: #171f29;
+  --color-line: #1e2733;
+  --color-line-soft: #18202a;
+
+  --color-ink: #e6edf3;
+  --color-muted: #8b98a5;
+  --color-faint: #5c6b7a;
+
+  --color-proven: #3fb950;
+  --color-proven-dim: #12331c;
+  --color-predicted: #d29922;
+  --color-predicted-dim: #33280c;
+  --color-block: #f85149;
+  --color-block-dim: #3a1517;
+  --color-accent: #58a6ff;
+  --color-accent-dim: #0d2440;
+
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+html,
+body {
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  border-color: var(--color-line);
+}
+
+::selection {
+  background: var(--color-accent-dim);
+}
+
+/* Scrollbars that do not shout. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2b3947;
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.pulse-soft {
+  animation: pulse-soft 1.4s ease-in-out infinite;
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.slide-up {
+  animation: slide-up 0.22s ease-out both;
+}
