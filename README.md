@@ -56,6 +56,11 @@ Concretely:
 - It reports real constraint violations, quoting the failing row, before commit.
 - The gate is enforced **by Postgres**, not by convention. An ungated `UPDATE`
   raises `PREFLIGHT: ungated UPDATE on preflight.orders blocked`.
+- Execution is streamed, so the canary running, the verifier checking and the
+  breaker tripping happen in front of you rather than behind a spinner. The
+  stages that never ran are visibly queued, not merely absent afterwards.
+- "42 rows changed" expands into the actual rows, showing only the fields that
+  differ. Every run is kept, with its verdict and plan hash.
 
 ## Quickstart
 

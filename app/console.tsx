@@ -6,10 +6,12 @@ import type {
   ExecutionReport,
   RollbackReport,
   Consequences,
+  ExecEvent,
 } from "@/lib/gateway";
+import type { Divergence } from "@/lib/gateway/verifier";
 import { money } from "@/lib/policy/invariants";
 import { PRESETS } from "@/lib/presets";
-import { Badge, Diff, Evidence, Invariants, Rollback, Verdict } from "./report";
+import { Badge, Diff, Evidence, History, Invariants, Rollback, Verdict } from "./report";
 
 type Phase =
   | "boot"
@@ -31,6 +33,13 @@ type State = {
   stripe: boolean;
   gemini: boolean;
   totals?: { orders: number; captured: number; refunded: number };
+  runs?: {
+    id: string;
+    intent: string | null;
+    planHash: string;
+    status: string;
+    createdAt: string;
+  }[];
 };
 
 async function post<T>(url: string, body?: unknown): Promise<T> {
@@ -42,6 +51,91 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
   const json = await res.json();
   if (!res.ok) throw new Error(json.error ?? `${url} failed`);
   return json as T;
+}
+
+type LiveStage = {
+  stage: number;
+  kind: "canary" | "batch";
+  references: string[];
+  status: "pending" | "running" | "ok" | "halted";
+  note?: string;
+  divergences: Divergence[];
+  externalCount?: number;
+};
+
+type StreamEvent = ExecEvent | { type: "done"; report: ExecutionReport } | { type: "error"; error: string };
+
+/** Read the execute endpoint's server-sent events. */
+async function streamExecute(
+  body: unknown,
+  onEvent: (e: StreamEvent) => void
+): Promise<void> {
+  const res = await fetch("/api/execute", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok || !res.body) {
+    const j = await res.json().catch(() => ({}) as { error?: string });
+    throw new Error(j.error ?? "Execution failed to start.");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+
+    for (const frame of frames) {
+      const line = frame.trim();
+      if (!line.startsWith("data:")) continue;
+      try {
+        onEvent(JSON.parse(line.slice(5).trim()) as StreamEvent);
+      } catch {
+        // A partial frame is not worth failing an execution over.
+      }
+    }
+  }
+}
+
+/** Fold one progress event into the live stage list. */
+function applyEvent(stages: LiveStage[], e: ExecEvent): LiveStage[] {
+  if (e.type === "plan") {
+    return e.stages.map((s) => ({ ...s, status: "pending" as const, divergences: [] }));
+  }
+  return stages.map((s) => {
+    if (s.stage !== e.stage) return s;
+    switch (e.type) {
+      case "stage:start":
+        return { ...s, status: "running", note: "opening the gate" };
+      case "stage:verify":
+        return {
+          ...s,
+          note:
+            e.phase === "before"
+              ? e.ok
+                ? "forecast still holds"
+                : "forecast is stale"
+              : e.ok
+                ? "reality matches"
+                : "reality diverged",
+          divergences: [...s.divergences, ...e.divergences],
+        };
+      case "stage:external":
+        return { ...s, note: `${e.count} ${e.system} call(s)`, externalCount: e.count };
+      case "stage:done":
+        return { ...s, status: e.status, note: undefined };
+      default:
+        return s;
+    }
+  });
 }
 
 /** Remedies that add exclusions should accumulate, not replace one another. */
@@ -71,6 +165,8 @@ export default function Console() {
   const [error, setError] = useState<string | null>(null);
   const [intent, setIntent] = useState("");
   const [predicting, setPredicting] = useState(false);
+  const [live, setLive] = useState<LiveStage[]>([]);
+  const [liveHalt, setLiveHalt] = useState<string | null>(null);
   const booted = useRef(false);
 
   const refreshState = useCallback(async () => {
@@ -136,6 +232,7 @@ export default function Console() {
       setPhase("reviewing");
       // Proven evidence is on screen now; the opinion can arrive late.
       void loadConsequences(r.runId);
+      void refreshState();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhase(report ? "reviewing" : "idle");
@@ -210,13 +307,27 @@ export default function Console() {
   async function onExecute() {
     if (!report || !grant) return;
     setError(null);
+    setLive([]);
+    setLiveHalt(null);
     setPhase("executing");
+
+    let failure: string | null = null;
+    let finished: ExecutionReport | null = null;
+
     try {
-      const r = await post<ExecutionReport>("/api/execute", {
-        runId: report.runId,
-        token: grant.token,
+      await streamExecute({ runId: report.runId, token: grant.token }, (e) => {
+        if (e.type === "error") {
+          failure = e.error;
+        } else if (e.type === "done") {
+          finished = e.report;
+        } else {
+          if (e.type === "halted") setLiveHalt(e.reason);
+          setLive((cur) => applyEvent(cur, e));
+        }
       });
-      setExec(r);
+
+      if (failure) throw new Error(failure);
+      if (finished) setExec(finished);
       setPhase("executed");
       await refreshState();
     } catch (e) {
@@ -317,11 +428,13 @@ export default function Console() {
         </div>
       )}
 
-      {phase === "executing" && <Waiting text="Executing in stages, verifying between each…" />}
+      {phase === "executing" && <LiveExecution stages={live} halt={liveHalt} />}
 
       {exec && phase !== "executing" && (
         <Execution exec={exec} rolled={rolled} onRollback={onRollback} busy={busy} />
       )}
+
+      <History runs={state?.runs ?? []} currentRunId={report?.runId} />
 
       <Footer />
     </div>
@@ -686,6 +799,90 @@ function Execution({
           </div>
         )}
       </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------- live execution */
+
+function LiveExecution({ stages, halt }: { stages: LiveStage[]; halt: string | null }) {
+  if (stages.length === 0) {
+    return <Waiting text="Opening the gate…" />;
+  }
+
+  const mark: Record<LiveStage["status"], string> = {
+    pending: "text-faint",
+    running: "text-accent",
+    ok: "text-proven",
+    halted: "text-block",
+  };
+
+  return (
+    <section className="mt-6 rounded-lg border border-line bg-panel slide-up">
+      <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+        <h3 className="text-sm font-semibold text-ink">Executing</h3>
+        <span className="text-xs text-muted">
+          one stage at a time, checked against reality before and after each
+        </span>
+      </header>
+
+      <ul className="divide-y divide-line-soft">
+        {stages.map((s) => (
+          <li key={s.stage} className="px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className={`font-mono text-xs ${mark[s.status]}`}>
+                {s.status === "running" ? (
+                  <span className="pulse-soft">running</span>
+                ) : s.status === "pending" ? (
+                  "queued"
+                ) : s.status === "ok" ? (
+                  "done"
+                ) : (
+                  "halted"
+                )}
+              </span>
+              <span className="w-14 font-mono text-[11px] uppercase tracking-wider text-faint">
+                {s.kind}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted">
+                {s.references.join("  ")}
+              </span>
+              {s.note && (
+                <span className="font-mono text-[11px] text-accent">{s.note}</span>
+              )}
+              {s.externalCount !== undefined && s.externalCount > 0 && (
+                <span className="font-mono text-[11px] text-proven">
+                  {s.externalCount} stripe
+                </span>
+              )}
+            </div>
+
+            {s.divergences.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {s.divergences.map((d, i) => (
+                  <p
+                    key={i}
+                    className={`text-xs leading-relaxed ${
+                      d.severity === "critical" ? "text-block" : "text-predicted"
+                    }`}
+                  >
+                    {d.detail}
+                  </p>
+                ))}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {halt && (
+        <div className="border-t border-block/30 bg-block-dim/40 px-4 py-3">
+          <p className="text-sm leading-relaxed text-ink">
+            <span className="font-mono text-xs font-bold text-block">BREAKER TRIPPED · </span>
+            {halt}
+          </p>
+        </div>
+      )}
     </section>
   );
 }

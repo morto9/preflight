@@ -76,6 +76,8 @@ export type SimulationReport = {
     tableCounts: Record<string, number>;
     /** Rows changed by cascade that the plan never named. */
     unnamedEffects: { table: string; rows: number }[];
+    /** The actual audit rows, so "42 rows changed" can be inspected. */
+    sample: AuditSample[];
     failure?: PgFailure;
   };
 
@@ -100,6 +102,17 @@ export type SimulationReport = {
 
   /** Filled in by the consequence model. Explicitly a prediction. */
   consequences?: Consequences;
+};
+
+/** One row the dry run touched, reduced to what a human would want to read. */
+export type AuditSample = {
+  table: string;
+  op: "INSERT" | "UPDATE" | "DELETE";
+  pk: string | null;
+  /** For an UPDATE, only the fields that actually differ. */
+  changed: { field: string; from: unknown; to: unknown }[];
+  /** For an INSERT or DELETE, a few identifying fields. */
+  summary: Record<string, unknown>;
 };
 
 export type Consequences = {
@@ -172,6 +185,7 @@ export async function simulate(args: {
       changeCount: dry.changes.length,
       tableCounts: countByTable(dry.changes),
       unnamedEffects: unnamedEffects(dry.changes, plan.tool),
+      sample: auditSample(dry.changes),
       failure: dry.failure,
     },
     invariants,
@@ -198,6 +212,39 @@ function countByTable(changes: AuditRow[]): Record<string, number> {
   const out: Record<string, number> = {};
   for (const c of changes) out[c.table_name] = (out[c.table_name] ?? 0) + 1;
   return out;
+}
+
+/**
+ * Reduce raw audit rows to something readable. An UPDATE is shown as the fields
+ * that actually differ rather than the whole row, which is usually two or three
+ * columns out of a dozen.
+ */
+const IDENTIFYING = ["reference", "email", "name", "kind", "amount_cents", "memo", "status", "number"];
+
+function auditSample(changes: AuditRow[], limit = 24): AuditSample[] {
+  return changes.slice(0, limit).map((c) => {
+    const row = (c.after_row ?? c.before_row ?? {}) as Record<string, unknown>;
+
+    const changed =
+      c.op === "UPDATE" && c.before_row && c.after_row
+        ? Object.keys(c.after_row)
+            .filter(
+              (k) =>
+                JSON.stringify((c.before_row as Record<string, unknown>)[k]) !==
+                JSON.stringify((c.after_row as Record<string, unknown>)[k])
+            )
+            .map((field) => ({
+              field,
+              from: (c.before_row as Record<string, unknown>)[field],
+              to: (c.after_row as Record<string, unknown>)[field],
+            }))
+        : [];
+
+    const summary: Record<string, unknown> = {};
+    for (const k of IDENTIFYING) if (row[k] !== undefined && row[k] !== null) summary[k] = row[k];
+
+    return { table: c.table_name, op: c.op, pk: c.row_pk, changed, summary };
+  });
 }
 
 /** Tables a given tool's request can fairly be said to be about. */
@@ -344,6 +391,21 @@ export type StageReport = {
   receiptId?: string;
 };
 
+/**
+ * Progress emitted while a run executes.
+ *
+ * Execution is staged and each stage is verified, but that whole sequence used
+ * to happen behind one blocking request -- so the most interesting thing this
+ * system does was invisible until it was over. These let the client watch it.
+ */
+export type ExecEvent =
+  | { type: "plan"; noun: string; stages: { stage: number; kind: "canary" | "batch"; references: string[] }[] }
+  | { type: "stage:start"; stage: number }
+  | { type: "stage:verify"; stage: number; phase: "before" | "after"; ok: boolean; divergences: Divergence[] }
+  | { type: "stage:external"; stage: number; system: string; count: number }
+  | { type: "stage:done"; stage: number; status: "ok" | "halted"; changed: Record<string, number>; externalIds: string[] }
+  | { type: "halted"; stage: number; reason: string };
+
 export type ExecutionReport = {
   runId: string;
   status: "completed" | "halted";
@@ -359,7 +421,10 @@ export type ExecutionReport = {
 export async function execute(args: {
   runId: string;
   token: string;
+  /** Called as each stage progresses. Fire-and-forget; never awaited. */
+  onEvent?: (event: ExecEvent) => void;
 }): Promise<ExecutionReport> {
+  const emit = (e: ExecEvent) => args.onEvent?.(e);
   const sql = db();
 
   const [runRow] = await sql`
@@ -392,6 +457,7 @@ export async function execute(args: {
       storedHash,
       params: plan.params,
       sim: runRow.simulation ? asJson<SimulationReport>(runRow.simulation) : null,
+      onEvent: args.onEvent,
     });
   }
 
@@ -471,6 +537,16 @@ export async function execute(args: {
     };
   }
 
+  emit({
+    type: "plan",
+    noun: "order",
+    stages: stages.map((s, i) => ({
+      stage: i + 1,
+      kind: i === 0 ? "canary" : "batch",
+      references: s.map((t) => t.reference),
+    })),
+  });
+
   let approvalId: string | null = null;
   let totalOrders = 0;
   let totalCents = 0;
@@ -495,8 +571,17 @@ export async function execute(args: {
       continue;
     }
 
+    emit({ type: "stage:start", stage: stageNo });
+
     // --- (a) Is the forecast still true? Check BEFORE anything irreversible.
     const pre = await verifyBeforeStage(stageTargets, forecast);
+    emit({
+      type: "stage:verify",
+      stage: stageNo,
+      phase: "before",
+      ok: worstDivergence(pre) !== "critical",
+      divergences: pre,
+    });
     if (worstDivergence(pre) === "critical") {
       allDivergences.push(...pre);
       await tripBreaker(args.runId, stageNo, pre, "source of truth diverged from the forecast");
@@ -512,6 +597,8 @@ export async function execute(args: {
         divergences: pre,
         refundIds: [],
       });
+      emit({ type: "stage:done", stage: stageNo, status: "halted", changed: {}, externalIds: [] });
+      emit({ type: "halted", stage: stageNo, reason: haltReason });
       continue;
     }
 
@@ -541,6 +628,8 @@ export async function execute(args: {
         }
       }
     }
+
+    emit({ type: "stage:external", stage: stageNo, system: "stripe", count: refundIds.size });
 
     // --- (c) Record it. Same DB code path the simulation used.
     const stageCtx: ActionCtx = { ...ctx, stage: stageNo };
@@ -584,6 +673,13 @@ export async function execute(args: {
       refundIds,
     });
     stageDivergences.push(...post);
+    emit({
+      type: "stage:verify",
+      stage: stageNo,
+      phase: "after",
+      ok: worstDivergence(post) !== "critical",
+      divergences: post,
+    });
 
     const verdict = worstDivergence(stageDivergences);
     if (verdict === "critical") {
@@ -605,6 +701,15 @@ export async function execute(args: {
       refundIds: [...refundIds.values()],
       receiptId,
     });
+
+    emit({
+      type: "stage:done",
+      stage: stageNo,
+      status: halted ? "halted" : "ok",
+      changed: countByTable(result.changes),
+      externalIds: [...refundIds.values()],
+    });
+    if (halted) emit({ type: "halted", stage: stageNo, reason: haltReason! });
   }
 
   if (!halted) {
@@ -672,7 +777,9 @@ async function executePurge(args: {
   storedHash: string;
   params: PurgeParams;
   sim: SimulationReport | null;
+  onEvent?: (event: ExecEvent) => void;
 }): Promise<ExecutionReport> {
+  const emit = (e: ExecEvent) => args.onEvent?.(e);
   const sql = db();
   const ctx: ActionCtx = {
     tenantId: args.tenantId,
@@ -730,6 +837,16 @@ async function executePurge(args: {
     }
   }
 
+  emit({
+    type: "plan",
+    noun: "customer",
+    stages: stages.map((st, i) => ({
+      stage: i + 1,
+      kind: i === 0 ? "canary" : "batch",
+      references: st.map((t) => t.name),
+    })),
+  });
+
   let approvalId: string | null = null;
   let total = 0;
   let halted = false;
@@ -754,6 +871,8 @@ async function executePurge(args: {
       });
       continue;
     }
+
+    emit({ type: "stage:start", stage: stageNo });
 
     const stageCtx: ActionCtx = { ...ctx, stage: stageNo };
     type PurgeWrite = { customers: number };
@@ -780,6 +899,13 @@ async function executePurge(args: {
       actualChanges: result.changes,
       refundIds: new Map(),
     });
+    emit({
+      type: "stage:verify",
+      stage: stageNo,
+      phase: "after",
+      ok: worstDivergence(post) !== "critical",
+      divergences: post,
+    });
 
     if (worstDivergence(post) === "critical") {
       allDivergences.push(...post);
@@ -801,6 +927,15 @@ async function executePurge(args: {
       refundIds: [],
       receiptId,
     });
+
+    emit({
+      type: "stage:done",
+      stage: stageNo,
+      status: halted ? "halted" : "ok",
+      changed: countByTable(result.changes),
+      externalIds: [],
+    });
+    if (halted) emit({ type: "halted", stage: stageNo, reason: haltReason! });
   }
 
   if (!halted) {

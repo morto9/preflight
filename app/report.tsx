@@ -159,6 +159,8 @@ export function Evidence({
             ))}
         </dl>
 
+        {report.proven.sample?.length > 0 && <AuditRows report={report} />}
+
         {report.proven.unnamedEffects.length > 0 && (
           <div className="mt-4 rounded border border-predicted/25 bg-predicted-dim/30 p-3">
             <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-predicted">
@@ -259,6 +261,139 @@ export function Evidence({
         )}
       </Panel>
     </div>
+  );
+}
+
+/**
+ * The rows behind the counts.
+ *
+ * "42 rows changed" is an assertion; this is the evidence for it. An UPDATE
+ * shows only the fields that actually differ, because a whole row of unchanged
+ * columns buries the two that matter.
+ */
+function AuditRows({ report }: { report: SimulationReport }) {
+  const [open, setOpen] = useState(false);
+  const sample = report.proven.sample ?? [];
+  const hidden = report.proven.changeCount - sample.length;
+
+  return (
+    <div className="mt-4 border-t border-line-soft pt-3">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="font-mono text-[11px] text-accent hover:underline"
+      >
+        {open ? "hide" : "show"} the {report.proven.changeCount} changed row(s)
+      </button>
+
+      {open && (
+        <div className="mt-2 max-h-72 overflow-auto rounded border border-line bg-ground">
+          <table className="w-full border-collapse font-mono text-[11px]">
+            <tbody>
+              {sample.map((r, n) => (
+                <tr key={n} className="border-b border-line-soft last:border-0 align-top">
+                  <td className="whitespace-nowrap px-2 py-1.5">
+                    <span
+                      className={
+                        r.op === "INSERT"
+                          ? "text-proven"
+                          : r.op === "DELETE"
+                            ? "text-block"
+                            : "text-predicted"
+                      }
+                    >
+                      {r.op === "INSERT" ? "+" : r.op === "DELETE" ? "−" : "~"}
+                    </span>{" "}
+                    <span className="text-muted">{r.table}</span>
+                  </td>
+                  <td className="px-2 py-1.5 text-ink">
+                    {r.changed.length > 0 ? (
+                      <span className="flex flex-wrap gap-x-3 gap-y-0.5">
+                        {r.changed.map((c) => (
+                          <span key={c.field}>
+                            <span className="text-faint">{c.field}</span>{" "}
+                            <span className="text-block">{fmt(c.from)}</span>
+                            <span className="text-faint"> → </span>
+                            <span className="text-proven">{fmt(c.to)}</span>
+                          </span>
+                        ))}
+                      </span>
+                    ) : (
+                      <span className="text-muted">
+                        {Object.entries(r.summary)
+                          .map(([k, v]) => `${k}=${fmt(v)}`)
+                          .join("  ") || r.pk?.slice(0, 8)}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {hidden > 0 && (
+            <p className="px-2 py-1.5 text-[11px] text-faint">…and {hidden} more.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function fmt(v: unknown): string {
+  if (v === null || v === undefined) return "null";
+  const s = String(v);
+  return s.length > 28 ? `${s.slice(0, 26)}…` : s;
+}
+
+/* ------------------------------------------------------------- run history */
+
+export function History({
+  runs,
+  currentRunId,
+}: {
+  runs: { id: string; intent: string | null; planHash: string; status: string; createdAt: string }[];
+  currentRunId?: string;
+}) {
+  if (runs.length === 0) return null;
+
+  const tone: Record<string, string> = {
+    blocked: "text-block",
+    halted: "text-block",
+    completed: "text-proven",
+    rolled_back: "text-accent",
+    executing: "text-predicted",
+    simulated: "text-muted",
+  };
+
+  return (
+    <section className="mt-6 rounded-lg border border-line bg-panel">
+      <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+        <h3 className="text-sm font-semibold text-ink">This sandbox&rsquo;s runs</h3>
+        <span className="text-xs text-faint">
+          every simulation is a durable record, not a screen that disappears
+        </span>
+      </header>
+      <ul className="divide-y divide-line-soft">
+        {runs.map((r) => (
+          <li
+            key={r.id}
+            className={`flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2 ${
+              r.id === currentRunId ? "bg-panel-2/70" : ""
+            }`}
+          >
+            <span className={`w-24 shrink-0 font-mono text-[11px] ${tone[r.status] ?? "text-muted"}`}>
+              {r.status}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-xs text-muted">
+              {r.intent ?? "(no intent recorded)"}
+            </span>
+            <code className="font-mono text-[10px] text-faint">{r.planHash.slice(0, 8)}</code>
+            <time className="font-mono text-[10px] text-faint">
+              {new Date(r.createdAt).toLocaleTimeString()}
+            </time>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
