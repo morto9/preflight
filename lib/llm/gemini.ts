@@ -386,7 +386,7 @@ export function ruleBasedConsequences(report: SimulationReport): Consequences {
     watchFor,
     summary: money_
       ? `${report.summary.acting} order(s) change, moving ${money(report.summary.moneyCents)}.`
-      : `${report.summary.acting} customer record(s) change, plus ${report.proven.changeCount - report.summary.acting} dependent row(s).`,
+      : purgeSummary(report),
   };
 }
 
@@ -486,4 +486,19 @@ function degradedReason(e: unknown): string {
     default:
       return "Every configured model is rate limited right now" + tail;
   }
+}
+
+/**
+ * A refused write has a changeCount of zero, so dependent rows cannot be
+ * inferred by subtraction -- that produced "plus -2 dependent row(s)".
+ */
+function purgeSummary(report: SimulationReport): string {
+  const acting = report.summary.acting;
+  const dependents = Math.max(0, report.proven.changeCount - acting);
+  if (report.proven.changeCount === 0) {
+    return `${acting} customer record(s) targeted; the database refused the write.`;
+  }
+  return dependents
+    ? `${acting} customer record(s) change, plus ${dependents} dependent row(s).`
+    : `${acting} customer record(s) change.`;
 }
