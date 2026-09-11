@@ -1,4 +1,6 @@
-import { ActionPlan } from "@/lib/plan/schema";
+import { createHash } from "node:crypto";
+import { ActionPlan, canonicalize } from "@/lib/plan/schema";
+import { db, jsonb, asJson } from "@/lib/db";
 import type { SimulationReport, Consequences } from "@/lib/gateway";
 import { money } from "@/lib/policy/invariants";
 
@@ -22,15 +24,34 @@ export function geminiEnabled(): boolean {
   return Boolean(process.env.GEMINI_API_KEY);
 }
 
-function model(): string {
-  return process.env.GEMINI_MODEL || "gemini-2.5-flash";
+/**
+ * Models to try, in order.
+ *
+ * The free tier meters requests per DAY per MODEL for the whole project -- 20
+ * for gemini-2.5-flash -- so exhausting one model does not exhaust the others.
+ * Walking a chain multiplies the usable allowance without changing behaviour.
+ */
+function modelChain(): string[] {
+  const primary = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+  const rest = (
+    process.env.GEMINI_MODEL_FALLBACKS ||
+    "gemini-2.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash"
+  ).split(",");
+
+  return [...new Set([primary, ...rest].map((m) => m.trim()).filter(Boolean))];
+}
+
+export class QuotaExhausted extends Error {
+  constructor(public readonly models: string[]) {
+    super(`Every configured model has exhausted its free daily quota: ${models.join(", ")}`);
+  }
 }
 
 async function callGemini(
   prompt: string,
   responseSchema: Record<string, unknown>,
   opts: { thinking?: boolean } = {}
-): Promise<unknown> {
+): Promise<{ data: unknown; model: string }> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set");
 
@@ -44,25 +65,49 @@ async function callGemini(
     },
   };
 
-  const res = await fetch(`${ENDPOINT}/${model()}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
+  const chain = modelChain();
+  const exhausted: string[] = [];
+  let lastError = "";
 
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Gemini ${res.status}: ${detail.slice(0, 300)}`);
+  for (const model of chain) {
+    let res: Response;
+    try {
+      res = await fetch(`${ENDPOINT}/${model}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (e) {
+      lastError = `${model}: ${e instanceof Error ? e.message : String(e)}`;
+      continue;
+    }
+
+    // Quota is per model, so this one being spent says nothing about the next.
+    if (res.status === 429) {
+      exhausted.push(model);
+      continue;
+    }
+
+    if (!res.ok) {
+      lastError = `${model}: ${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`;
+      continue;
+    }
+
+    const json = (await res.json()) as {
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      lastError = `${model}: returned no content`;
+      continue;
+    }
+
+    return { data: JSON.parse(text), model };
   }
 
-  const json = (await res.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  };
-  const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Gemini returned no content");
-
-  return JSON.parse(text);
+  if (exhausted.length === chain.length) throw new QuotaExhausted(exhausted);
+  throw new Error(`Gemini unavailable -- ${lastError}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +170,8 @@ Rules:
 
 Request: ${JSON.stringify(intent)}`;
 
-  const raw = (await callGemini(prompt, PLAN_SCHEMA)) as Record<string, unknown>;
+  const { data } = await callGemini(prompt, PLAN_SCHEMA);
+  const raw = data as Record<string, unknown>;
   const rationale = String(raw.rationale ?? "");
 
   const plan = ActionPlan.parse(narrow(raw));
@@ -235,7 +281,8 @@ Answer concisely and concretely:
   a prediction, not a measurement.
 - summary: one sentence an operator reads before approving. Conditional voice.`;
 
-  const raw = (await callGemini(prompt, CONSEQUENCE_SCHEMA, { thinking: true })) as {
+  const { data, model } = await callGemini(prompt, CONSEQUENCE_SCHEMA, { thinking: true });
+  const raw = data as {
     summary: string;
     impacted: string[];
     sideEffects: string[];
@@ -245,6 +292,7 @@ Answer concisely and concretely:
 
   return {
     source: "gemini",
+    model,
     confidence: clamp(raw.confidence),
     impacted: raw.impacted?.slice(0, 5) ?? [],
     sideEffects: raw.sideEffects?.slice(0, 5) ?? [],
@@ -292,21 +340,89 @@ export function ruleBasedConsequences(report: SimulationReport): Consequences {
 }
 
 /**
+ * The facts the prompt actually uses.
+ *
+ * Deliberately aggregate: no order ids, no sandbox id. Two visitors running the
+ * same preset reach identical facts, so they share one answer instead of
+ * spending two of the day's twenty requests asking the same question.
+ */
+function consequenceFacts(report: SimulationReport) {
+  return {
+    tool: report.tool,
+    verdict: report.verdict,
+    acting: report.summary.acting,
+    matched: report.summary.matched,
+    moneyCents: report.summary.moneyCents,
+    changeCount: report.proven.changeCount,
+    tableCounts: report.proven.tableCounts,
+    externalCount: report.external.length,
+    invariants: report.invariants.map((i) => `${i.severity}:${i.label}`).sort(),
+  };
+}
+
+function cacheKey(report: SimulationReport): string {
+  return createHash("sha256").update(canonicalize(consequenceFacts(report))).digest("hex");
+}
+
+async function readCache(key: string): Promise<Consequences | null> {
+  try {
+    const [row] = await db()`
+      update preflight.consequence_cache
+         set hits = hits + 1
+       where key = ${key}
+      returning consequences`;
+    return row ? asJson<Consequences>(row.consequences) : null;
+  } catch {
+    // A missing cache table must never cost us the prediction.
+    return null;
+  }
+}
+
+async function writeCache(key: string, consequences: Consequences): Promise<void> {
+  try {
+    await db()`
+      insert into preflight.consequence_cache (key, model, consequences)
+      values (${key}, ${consequences.model ?? null}, ${jsonb(consequences)})
+      on conflict (key) do nothing`;
+  } catch {
+    // Failing to cache is not worth failing the request over.
+  }
+}
+
+/**
  * Never let the consequence model break a simulation.
  *
- * The failure is logged rather than swallowed: a fallback that hides why it
- * fired is impossible to diagnose in production, and the UI would quietly show
- * a weaker answer with no indication anything went wrong.
+ * Failures are logged and, when they happen, said out loud in the returned
+ * value: a fallback that hides why it fired looks identical to a genuinely
+ * thin answer, which is how a quota problem went unnoticed for a day.
  */
 export async function consequencesFor(report: SimulationReport): Promise<Consequences> {
-  if (!geminiEnabled()) return ruleBasedConsequences(report);
+  if (!geminiEnabled()) {
+    return {
+      ...ruleBasedConsequences(report),
+      degraded: "No model is configured, so this is a rules-based summary.",
+    };
+  }
+
+  const key = cacheKey(report);
+  const hit = await readCache(key);
+  if (hit) return { ...hit, cached: true };
+
   try {
-    return await predictConsequences(report);
+    const fresh = await predictConsequences(report);
+    await writeCache(key, fresh);
+    return fresh;
   } catch (e) {
+    const spent = e instanceof QuotaExhausted;
     console.error(
       "[preflight] consequence model failed, falling back to rules:",
       e instanceof Error ? e.message : String(e)
     );
-    return ruleBasedConsequences(report);
+    return {
+      ...ruleBasedConsequences(report),
+      degraded: spent
+        ? "Every model has spent its free daily quota, so this is a rules-based summary rather than a model's reasoning."
+        : "The model could not be reached, so this is a rules-based summary.",
+    };
   }
 }

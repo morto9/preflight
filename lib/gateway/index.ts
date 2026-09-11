@@ -122,6 +122,12 @@ export type Consequences = {
   sideEffects: string[];
   watchFor: string[];
   summary: string;
+  /** Which model answered, when one did. */
+  model?: string;
+  /** Set when this is the rules fallback, saying plainly why. */
+  degraded?: string;
+  /** True when served from cache rather than a fresh model call. */
+  cached?: boolean;
 };
 
 // ---------------------------------------------------------------------------

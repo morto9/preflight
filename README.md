@@ -159,6 +159,22 @@ Gemini 2.5 Flash runs inside the product itself as the planner and the consequen
 model. Model choice was researched against live free-tier limits rather than
 assumed; Gemini won on free-tier request volume and structured-output support.
 
+### On the Gemini free tier
+
+Worth knowing before you rely on it: the free tier meters **20 requests per day
+per model, for the whole project** -- not per user, and not the four figures
+some secondary sources claim. A preset-driven demo exhausts that in an
+afternoon, after which the predicted panel silently thins out.
+
+Three things address it. Predictions are cached against a hash of the aggregate
+facts the prompt uses, so every visitor running the same preset shares one
+answer instead of spending a request each. Quota is per model, so the client
+walks a chain and moves on when one is spent. And when it genuinely runs out,
+the panel says so rather than quietly serving a weaker answer.
+
+Attaching Cloud Billing lifts the limit entirely, and a Google AI Pro
+subscription includes $10/month of Cloud credits that covers it.
+
 ### Key decisions
 
 - **The gate is a database trigger, not a code convention.** Enforcing it in

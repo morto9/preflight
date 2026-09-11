@@ -265,6 +265,11 @@ export function Evidence({
           <p className="text-sm text-muted">No prediction available.</p>
         ) : (
           <div className="space-y-3">
+            {c.degraded && (
+              <p className="rounded border border-predicted/30 bg-predicted-dim/40 px-2.5 py-2 text-xs leading-relaxed text-predicted">
+                {c.degraded} The proven column is unaffected.
+              </p>
+            )}
             <p className="text-sm leading-relaxed text-ink">{c.summary}</p>
 
             <div className="flex items-center gap-2">
@@ -279,7 +284,8 @@ export function Evidence({
                 {Math.round(c.confidence * 100)}%
               </span>
               <span className="ml-auto font-mono text-[10px] text-faint">
-                {c.source === "gemini" ? "gemini" : "rule-based"}
+                {c.source === "gemini" ? (c.model ?? "gemini") : "rule-based"}
+                {c.cached ? " · cached" : ""}
               </span>
             </div>
 
