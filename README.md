@@ -49,6 +49,9 @@ Concretely:
   called by the simulation and by the executor **with no branch on mode**.
 - The simulation **blocks** plans and offers a one-click fix. It changes the
   decision rather than narrating it.
+- Every row in the diff is a checkbox. Untick anything, re-simulate, and the
+  plan hash changes -- which silently voids any approval already granted for
+  the previous version.
 - It surfaces effects nobody asked for — the ledger rows written by cascade.
 - It reports real constraint violations, quoting the failing row, before commit.
 - The gate is enforced **by Postgres**, not by convention. An ungated `UPDATE`
@@ -73,7 +76,7 @@ mode and the UI says so rather than pretending. Without Gemini, the preset inten
 still work and consequences fall back to a rule-based summary.
 
 ```bash
-npm test                          # 16 tests, against the real database
+npm test                          # 18 tests, against the real database
 npx tsx scripts/failure-test.ts   # the divergence demo
 npx tsx scripts/happy-path.ts     # blocked → tweak → execute → roll back
 npx tsx scripts/purge.ts          # the second gated action

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SimulationReport } from "@/lib/gateway";
+import type { Impact } from "@/lib/actions/types";
 import type { InvariantResult, Severity } from "@/lib/policy/invariants";
 import { money } from "@/lib/policy/invariants";
 
@@ -344,23 +345,63 @@ const DIFF_HEADERS: Record<string, [string, string, string, string, string]> = {
   "notify.broadcast": ["Recipient", "Contact", "State", "After", "Effect"],
 };
 
-export function Diff({ report }: { report: SimulationReport }) {
+/** Deselected by hand, as opposed to skipped because there is nothing to do. */
+const DESELECTED = "deselected by operator";
+
+export function Diff({
+  report,
+  onApplySelection,
+  busy = false,
+}: {
+  report: SimulationReport;
+  /** Re-simulate with exactly this set of rows excluded. */
+  onApplySelection?: (excludedIds: string[]) => void;
+  busy?: boolean;
+}) {
   const [showSkipped, setShowSkipped] = useState(false);
-  const rows = showSkipped ? report.impacts : report.impacts.filter((i) => !i.skipped);
-  const skipped = report.impacts.length - report.impacts.filter((i) => !i.skipped).length;
   const [h1, h2, h3, h4, h5] = DIFF_HEADERS[report.tool] ?? DIFF_HEADERS["refund.bulk"];
+
+  // A row can be toggled unless the database has nothing to do with it anyway.
+  const toggleable = (i: Impact) => !i.skipped || i.skipped === DESELECTED;
+  const excludedInPlan = useMemo(
+    () => new Set(report.impacts.filter((i) => i.skipped === DESELECTED).map((i) => i.id)),
+    [report]
+  );
+
+  const [excluded, setExcluded] = useState<Set<string>>(excludedInPlan);
+
+  // A new simulation replaces the selection; the plan is the source of truth.
+  useEffect(() => setExcluded(excludedInPlan), [excludedInPlan]);
+
+  const dirty =
+    excluded.size !== excludedInPlan.size || [...excluded].some((id) => !excludedInPlan.has(id));
+
+  const rows = showSkipped
+    ? report.impacts
+    : report.impacts.filter((i) => !i.skipped || excluded.has(i.id));
+  const hiddenCount = report.impacts.length - rows.length;
+
+  function toggle(id: string) {
+    setExcluded((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   return (
     <Panel
       title="Row-level diff"
       badge={<Badge tone="proven">Proven</Badge>}
-      subtitle="Every row this plan touches, before and after, taken from the rolled-back transaction."
+      subtitle="Every row this plan touches, before and after, taken from the rolled-back transaction. Untick anything you do not want and re-simulate."
     >
       <div className="-mx-4 overflow-x-auto">
-        <table className="w-full min-w-[640px] border-collapse text-sm">
+        <table className="w-full min-w-[680px] border-collapse text-sm">
           <thead>
             <tr className="border-b border-line text-[11px] uppercase tracking-wider text-faint">
-              <th className="px-4 py-2 text-left font-medium">{h1}</th>
+              <th className="w-8 px-4 py-2" />
+              <th className="px-2 py-2 text-left font-medium">{h1}</th>
               <th className="px-2 py-2 text-left font-medium">{h2}</th>
               <th className="px-2 py-2 text-right font-medium">{h3}</th>
               <th className="px-2 py-2 text-center font-medium" />
@@ -369,40 +410,88 @@ export function Diff({ report }: { report: SimulationReport }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((i) => (
-              <tr
-                key={i.id}
-                className={`border-b border-line-soft last:border-0 ${
-                  i.skipped ? "opacity-40" : ""
-                }`}
-              >
-                <td className="px-4 py-2 font-mono text-xs text-ink">{i.label}</td>
-                <td className="max-w-[180px] truncate px-2 py-2 text-xs text-muted">
-                  {String(i.who).split(" <")[0]}
-                </td>
-                <td className="px-2 py-2 text-right font-mono text-xs text-block">{i.from}</td>
-                <td className="px-2 py-2 text-center font-mono text-xs text-faint">→</td>
-                <td className="px-2 py-2 text-right font-mono text-xs text-proven">{i.to}</td>
-                <td className="px-4 py-2 text-right">
-                  {i.skipped ? (
-                    <span className="text-[11px] text-faint">{i.skipped}</span>
-                  ) : (
-                    <span className="font-mono text-xs text-ink">{i.delta}</span>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {rows.map((i) => {
+              const off = excluded.has(i.id);
+              const can = toggleable(i);
+              return (
+                <tr
+                  key={i.id}
+                  onClick={() => can && !busy && toggle(i.id)}
+                  className={`border-b border-line-soft last:border-0 ${
+                    can && !busy ? "cursor-pointer hover:bg-panel-2/70" : ""
+                  } ${off || (i.skipped && i.skipped !== DESELECTED) ? "opacity-40" : ""}`}
+                >
+                  <td className="px-4 py-2">
+                    <input
+                      type="checkbox"
+                      checked={!off}
+                      disabled={!can || busy}
+                      onChange={() => toggle(i.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label={`Include ${i.label}`}
+                      className="h-3.5 w-3.5 accent-proven"
+                    />
+                  </td>
+                  <td className="px-2 py-2 font-mono text-xs text-ink">{i.label}</td>
+                  <td className="max-w-[180px] truncate px-2 py-2 text-xs text-muted">
+                    {String(i.who).split(" <")[0]}
+                  </td>
+                  <td className="px-2 py-2 text-right font-mono text-xs text-block">{i.from}</td>
+                  <td className="px-2 py-2 text-center font-mono text-xs text-faint">→</td>
+                  <td className="px-2 py-2 text-right font-mono text-xs text-proven">
+                    {off ? "—" : i.to}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    {off ? (
+                      <span className="text-[11px] text-faint">excluded</span>
+                    ) : i.skipped ? (
+                      <span className="text-[11px] text-faint">{i.skipped}</span>
+                    ) : (
+                      <span className="font-mono text-xs text-ink">{i.delta}</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
-      {skipped > 0 && (
-        <button
-          onClick={() => setShowSkipped((v) => !v)}
-          className="mt-3 font-mono text-[11px] text-accent hover:underline"
-        >
-          {showSkipped ? "hide" : "show"} {skipped} skipped row(s)
-        </button>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        {hiddenCount > 0 && (
+          <button
+            onClick={() => setShowSkipped((v) => !v)}
+            className="font-mono text-[11px] text-accent hover:underline"
+          >
+            {showSkipped ? "hide" : "show"} {hiddenCount} skipped row(s)
+          </button>
+        )}
+
+        {dirty && onApplySelection && (
+          <div className="ml-auto flex items-center gap-2 slide-up">
+            <button
+              onClick={() => setExcluded(excludedInPlan)}
+              disabled={busy}
+              className="rounded border border-line px-2.5 py-1 text-xs text-muted transition hover:border-faint hover:text-ink disabled:opacity-40"
+            >
+              Reset
+            </button>
+            <button
+              onClick={() => onApplySelection([...excluded])}
+              disabled={busy}
+              className="rounded border border-accent/40 bg-accent-dim px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/20 disabled:opacity-40"
+            >
+              Re-simulate with {excluded.size} excluded
+            </button>
+          </div>
+        )}
+      </div>
+
+      {dirty && (
+        <p className="mt-2 text-[11px] leading-relaxed text-faint">
+          Nothing changes until you re-simulate. Doing so produces a new plan hash, which voids
+          any approval already granted for the current one.
+        </p>
       )}
     </Panel>
   );

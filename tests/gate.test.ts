@@ -208,6 +208,42 @@ describe("rollback", () => {
   });
 });
 
+describe("row-level selection", () => {
+  it("excluding named rows changes the plan, the money, and the diff", async () => {
+    const all = await simulate({ tenantId: TENANT, plan: plan() });
+    const dropped = all.impacts.filter((i) => !i.skipped).slice(0, 2).map((i) => i.id);
+
+    const fewer = await simulate({
+      tenantId: TENANT,
+      plan: plan({ excludeOrderIds: dropped }),
+    });
+
+    expect(fewer.planHash).not.toBe(all.planHash);
+    expect(fewer.summary.acting).toBe(all.summary.acting - 2);
+    expect(fewer.summary.moneyCents).toBeLessThan(all.summary.moneyCents);
+
+    // Deselected rows are reported as a decision, not as having nothing to do.
+    const off = fewer.impacts.filter((i) => dropped.includes(i.id));
+    expect(off).toHaveLength(2);
+    expect(off.every((i) => i.skipped === "deselected by operator")).toBe(true);
+  });
+
+  it("re-including a row restores it, because selection replaces rather than merges", async () => {
+    const all = await simulate({ tenantId: TENANT, plan: plan() });
+    const two = all.impacts.filter((i) => !i.skipped).slice(0, 2).map((i) => i.id);
+
+    const fewer = await simulate({ tenantId: TENANT, plan: plan({ excludeOrderIds: two }) });
+    const back = await simulate({
+      tenantId: TENANT,
+      plan: plan({ excludeOrderIds: [two[0]] }),
+    });
+
+    expect(fewer.summary.acting).toBe(all.summary.acting - 2);
+    expect(back.summary.acting).toBe(all.summary.acting - 1);
+    expect(back.summary.moneyCents).toBeGreaterThan(fewer.summary.moneyCents);
+  });
+});
+
 describe("customers.purge", () => {
   const purgePlan = (over: Record<string, unknown> = {}) =>
     ActionPlan.parse({

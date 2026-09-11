@@ -54,6 +54,9 @@ Click **"Exclude the 2 largest refund(s)."**
 > seventy-five, and the plan hash changed — so any approval for the old plan is
 > already dead."
 
+If you have a spare five seconds, untick a row in the diff by hand and
+re-simulate, to show the operator is not limited to the fix the system offered.
+
 Click **Approve**.
 
 ---

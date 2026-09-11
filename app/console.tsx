@@ -167,6 +167,21 @@ export default function Console() {
     }
   }
 
+  /**
+   * Rows ticked off by hand in the diff.
+   *
+   * Unlike a remedy, this states the whole exclusion set rather than adding to
+   * it, so re-including a row the operator previously removed actually works.
+   */
+  async function onSelectRows(excludedIds: string[]) {
+    if (!plan || !report) return;
+    const key = plan.tool === "customers.purge" ? "excludeCustomerIds" : "excludeOrderIds";
+    const next = { tool: plan.tool, params: { ...plan.params, [key]: excludedIds } };
+    setPlan(next);
+    setPrev(report);
+    await runSimulation({ plan: next, intent }, true);
+  }
+
   async function onRemedy(patch: Record<string, unknown>) {
     if (!plan || !report) return;
     const next = { tool: plan.tool, params: mergePatch(plan.params, patch) };
@@ -283,7 +298,7 @@ export default function Console() {
           <Verdict report={report} />
           <Evidence report={report} predicting={predicting} />
           <Invariants report={report} onRemedy={onRemedy} busy={busy} />
-          <Diff report={report} />
+          <Diff report={report} onApplySelection={onSelectRows} busy={busy} />
           <Rollback report={report} />
 
           <ActionBar
