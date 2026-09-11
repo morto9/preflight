@@ -14,7 +14,13 @@
 
   --color-ink: #e6edf3;
   --color-muted: #8b98a5;
-  --color-faint: #5c6b7a;
+  /* Was #5c6b7a, which measured ~3.4:1 against the ground -- under the 4.5:1
+     floor for small text, and these carry the stat labels. */
+  --color-faint: #7d8b9a;
+
+  /* Row tints for the split diff. Dark enough to sit under monospace text. */
+  --color-diff-remove: #2a1417;
+  --color-diff-add: #0e2a18;
 
   --color-proven: #3fb950;
   --color-proven-dim: #12331c;

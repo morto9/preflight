@@ -41,21 +41,41 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
   );
 }
 
+/**
+ * `hypothesis` is not decoration. A measured fact and a model's guess are
+ * different kinds of knowledge, so the one that is merely guessed is drawn
+ * without a fill and with a dashed edge -- it should look less load-bearing
+ * before anyone reads a word of it.
+ */
 function Panel({
   title,
   badge,
   subtitle,
+  variant = "solid",
   children,
 }: {
   title: string;
   badge?: React.ReactNode;
   subtitle?: string;
+  variant?: "solid" | "hypothesis";
   children: React.ReactNode;
 }) {
+  const hypothesis = variant === "hypothesis";
+
   return (
-    <section className="rounded-lg border border-line bg-panel">
-      <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
-        <h3 className="text-sm font-semibold text-ink">{title}</h3>
+    <section
+      className={`rounded-lg border ${
+        hypothesis ? "border-dashed border-predicted/30 bg-transparent" : "border-line bg-panel"
+      }`}
+    >
+      <header
+        className={`flex items-center gap-2 border-b px-4 py-2.5 ${
+          hypothesis ? "border-dashed border-predicted/20" : "border-line"
+        }`}
+      >
+        <h3 className={`text-sm font-semibold ${hypothesis ? "text-muted" : "text-ink"}`}>
+          {title}
+        </h3>
         {badge}
       </header>
       {subtitle && <p className="px-4 pt-3 text-xs leading-relaxed text-muted">{subtitle}</p>}
@@ -66,22 +86,35 @@ function Panel({
 
 /* ------------------------------------------------------------------- verdict */
 
+/**
+ * The decision, and nothing else competing with it.
+ *
+ * Whatever is at stake -- money for a refund, records for a purge -- is set at
+ * display size, because it is the one number the approval actually turns on.
+ */
 export function Verdict({ report }: { report: SimulationReport }) {
   const blocked = report.verdict === "blocked";
+  const money_ = report.summary.moneyCents > 0;
+  const tone = blocked ? "text-block" : "text-proven";
 
   return (
     <div
-      className={`rounded-lg border p-4 ${
-        blocked ? "border-block/40 bg-block-dim/40" : "border-proven/40 bg-proven-dim/40"
+      className={`overflow-hidden rounded-xl border ${
+        blocked ? "border-block/50 bg-block-dim/30" : "border-proven/50 bg-proven-dim/25"
       }`}
     >
-      <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <span
-            className={`font-mono text-sm font-bold tracking-wider ${
-              blocked ? "text-block" : "text-proven"
-            }`}
-          >
+      <div
+        className={`flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3 ${
+          blocked ? "border-block/25 bg-block-dim/40" : "border-proven/25 bg-proven-dim/40"
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          <span className={`relative flex h-2 w-2 ${blocked ? "" : "pulse-soft"}`}>
+            <span
+              className={`h-2 w-2 rounded-full ${blocked ? "bg-block" : "bg-proven"}`}
+            />
+          </span>
+          <span className={`font-mono text-sm font-bold tracking-[0.12em] ${tone}`}>
             {blocked ? "BLOCKED" : "READY TO EXECUTE"}
           </span>
           <span className="text-xs text-muted">
@@ -95,27 +128,40 @@ export function Verdict({ report }: { report: SimulationReport }) {
         </code>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Stat label="Matched" value={String(report.summary.matched)} />
-        <Stat label="Acting on" value={String(report.summary.acting)} />
-        {report.summary.moneyCents > 0 ? (
+      <div className="flex flex-wrap items-end gap-x-12 gap-y-5 px-5 py-5">
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-faint">
+            {money_ ? "Money moving" : "Records affected"}
+          </div>
+          <div
+            className={`mt-1 font-mono text-4xl leading-none font-semibold tracking-tight sm:text-5xl ${tone}`}
+          >
+            {money_ ? money(report.summary.moneyCents) : report.summary.acting}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
           <Stat
-            label="Money moving"
-            value={money(report.summary.moneyCents)}
-            tone={blocked ? "text-block" : "text-proven"}
+            label={money_ ? "Orders" : "Matched"}
+            value={
+              money_
+                ? `${report.summary.acting} of ${report.summary.matched}`
+                : String(report.summary.matched)
+            }
           />
-        ) : (
+          {report.proven.failure ? (
+            <Stat label="Outcome" value="refused" tone="text-block" />
+          ) : (
+            <Stat label="Rows changed" value={String(report.proven.changeCount)} />
+          )}
           <Stat
             label="Unnamed effects"
             value={String(report.proven.unnamedEffects.reduce((n, u) => n + u.rows, 0))}
-            tone={blocked ? "text-block" : "text-predicted"}
+            tone={
+              report.proven.unnamedEffects.length > 0 ? "text-predicted" : "text-muted"
+            }
           />
-        )}
-        {report.proven.failure ? (
-          <Stat label="Outcome" value="refused" tone="text-block" />
-        ) : (
-          <Stat label="Rows changed" value={String(report.proven.changeCount)} />
-        )}
+        </div>
       </div>
     </div>
   );
@@ -193,6 +239,7 @@ export function Evidence({
       <Panel
         title="What might follow"
         badge={<Badge tone="predicted">Predicted</Badge>}
+        variant="hypothesis"
         subtitle="A model's reasoning about effects outside the database. Treat as a hypothesis. It never blocks anything on its own."
       >
         {!c && predicting ? (
@@ -536,11 +583,12 @@ export function Diff({
           <thead>
             <tr className="border-b border-line text-[11px] uppercase tracking-wider text-faint">
               <th className="w-8 px-4 py-2" />
+              <th className="w-5 py-2" />
               <th className="px-2 py-2 text-left font-medium">{h1}</th>
               <th className="px-2 py-2 text-left font-medium">{h2}</th>
-              <th className="px-2 py-2 text-right font-medium">{h3}</th>
+              <th className="px-3 py-2 text-right font-medium">{h3}</th>
               <th className="px-2 py-2 text-center font-medium" />
-              <th className="px-2 py-2 text-right font-medium">{h4}</th>
+              <th className="px-3 py-2 text-right font-medium">{h4}</th>
               <th className="px-4 py-2 text-right font-medium">{h5}</th>
             </tr>
           </thead>
@@ -567,13 +615,30 @@ export function Diff({
                       className="h-3.5 w-3.5 accent-proven"
                     />
                   </td>
+                  <td
+                    className={`py-2 text-center font-mono text-xs ${
+                      off || i.skipped ? "text-faint" : "text-predicted"
+                    }`}
+                  >
+                    {off || i.skipped ? "·" : "~"}
+                  </td>
                   <td className="px-2 py-2 font-mono text-xs text-ink">{i.label}</td>
                   <td className="max-w-[180px] truncate px-2 py-2 text-xs text-muted">
                     {String(i.who).split(" <")[0]}
                   </td>
-                  <td className="px-2 py-2 text-right font-mono text-xs text-block">{i.from}</td>
+                  <td
+                    className={`px-3 py-2 text-right font-mono text-xs ${
+                      off || i.skipped ? "text-faint" : "bg-diff-remove text-block"
+                    }`}
+                  >
+                    {i.from}
+                  </td>
                   <td className="px-2 py-2 text-center font-mono text-xs text-faint">→</td>
-                  <td className="px-2 py-2 text-right font-mono text-xs text-proven">
+                  <td
+                    className={`px-3 py-2 text-right font-mono text-xs ${
+                      off || i.skipped ? "text-faint" : "bg-diff-add text-proven"
+                    }`}
+                  >
                     {off ? "—" : i.to}
                   </td>
                   <td className="px-4 py-2 text-right">

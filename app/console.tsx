@@ -169,10 +169,28 @@ export default function Console() {
   const [liveHalt, setLiveHalt] = useState<string | null>(null);
   const booted = useRef(false);
 
-  const refreshState = useCallback(async () => {
-    const s = (await fetch("/api/state").then((r) => r.json())) as State;
-    setState(s);
-    return s;
+  /**
+   * Never throws.
+   *
+   * A cold start can answer this with the app shell rather than JSON while the
+   * route is still compiling. Parsing that threw outside the boot effect's try
+   * block, which left the console wedged in "boot" with null state -- every
+   * badge reading "off" and every button disabled, with nothing on screen to
+   * say why.
+   */
+  const refreshState = useCallback(async (): Promise<State> => {
+    const fallback: State = { provisioned: false, stripe: false, gemini: false };
+    try {
+      const res = await fetch("/api/state");
+      if (!res.ok || !res.headers.get("content-type")?.includes("application/json")) {
+        return fallback;
+      }
+      const s = (await res.json()) as State;
+      setState(s);
+      return s;
+    } catch {
+      return fallback;
+    }
   }, []);
 
   useEffect(() => {
@@ -180,18 +198,17 @@ export default function Console() {
     booted.current = true;
 
     (async () => {
-      const s = await refreshState();
-      if (s.provisioned) {
-        setPhase("idle");
-        return;
-      }
-      setPhase("provisioning");
       try {
+        const s = await refreshState();
+        if (s.provisioned) return;
+
+        setPhase("provisioning");
         await post("/api/sandbox");
         await refreshState();
-        setPhase("idle");
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        // Whatever happened, the console must not be left unusable.
         setPhase("idle");
       }
     })();
