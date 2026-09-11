@@ -208,6 +208,60 @@ describe("rollback", () => {
   });
 });
 
+describe("customers.purge", () => {
+  const purgePlan = (over: Record<string, unknown> = {}) =>
+    ActionPlan.parse({
+      tool: "customers.purge",
+      params: {
+        selector: { inactiveSince: "2024-01-01" },
+        strategy: "hard_delete",
+        excludeCustomerIds: [],
+        ...over,
+      },
+    });
+
+  it("is refused by a real foreign key, with the constraint named", async () => {
+    const sim = await simulate({ tenantId: TENANT, plan: purgePlan() });
+
+    expect(sim.verdict).toBe("blocked");
+    expect(sim.proven.failure?.code).toBe("23503");
+    expect(sim.proven.failure?.constraint).toBe("invoices_customer_id_fkey");
+    expect(
+      sim.invariants.some((i) => i.id === "retained_invoices" && i.severity === "block")
+    ).toBe(true);
+  });
+
+  it("reports the cascade the request never named", async () => {
+    const sim = await simulate({ tenantId: TENANT, plan: purgePlan() });
+    const cascade = sim.invariants.find((i) => i.id === "cascade_blast_radius");
+
+    expect(cascade).toBeDefined();
+    expect(Number(cascade!.evidence?.orders)).toBeGreaterThan(0);
+    // The remedy is a plan patch the operator can apply in one click.
+    expect(cascade!.remedy?.patch).toEqual({ strategy: "soft_archive" });
+  });
+
+  it("archives reversibly, and rolls back exactly", async () => {
+    const before = await fingerprint();
+
+    const sim = await simulate({
+      tenantId: TENANT,
+      plan: purgePlan({ strategy: "soft_archive" }),
+    });
+    expect(sim.verdict).toBe("ready");
+
+    const grant = await createApproval({ runId: sim.runId, planHash: sim.planHash });
+    const run = await execute({ runId: sim.runId, token: grant.token });
+
+    expect(run.status).toBe("completed");
+    expect(run.noun).toBe("customer");
+    expect(await fingerprint()).not.toEqual(before);
+
+    await rollback(sim.runId);
+    expect(await fingerprint()).toEqual(before);
+  });
+});
+
 /* ------------------------------------------------------------------------ */
 
 /** A cheap whole-tenant state fingerprint. */
@@ -218,13 +272,15 @@ async function fingerprint() {
       (select count(*) from preflight.orders where tenant_id = ${TENANT}) as orders,
       (select count(*) from preflight.refunds where tenant_id = ${TENANT}) as refunds,
       (select count(*) from preflight.ledger_entries where tenant_id = ${TENANT}) as ledger,
-      (select count(*) from preflight.customers where tenant_id = ${TENANT}) as customers`;
+      (select count(*) from preflight.customers where tenant_id = ${TENANT}) as customers,
+      (select count(*) from preflight.customers where tenant_id = ${TENANT} and archived_at is not null) as archived`;
   return {
     refunded: Number(row.refunded),
     orders: Number(row.orders),
     refunds: Number(row.refunds),
     ledger: Number(row.ledger),
     customers: Number(row.customers),
+    archived: Number(row.archived),
   };
 }
 

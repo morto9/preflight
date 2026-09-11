@@ -462,7 +462,10 @@ function ActionBar({
             disabled={blocked}
             className="rounded bg-proven px-4 py-2 text-sm font-semibold text-ground transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-30"
           >
-            Approve — {money(report.summary.moneyCents)} across {report.summary.acting} orders
+            Approve —{" "}
+            {report.summary.moneyCents > 0
+              ? `${money(report.summary.moneyCents)} across ${report.summary.acting} orders`
+              : `${report.summary.acting} ${report.tool === "customers.purge" ? "customer" : "record"}(s)`}
           </button>
           <button
             onClick={onReject}
@@ -493,15 +496,17 @@ function ActionBar({
             >
               Execute for real
             </button>
-            <button
-              onClick={onDrift}
-              className="rounded border border-predicted/40 bg-predicted-dim px-3 py-2 text-xs font-medium text-predicted transition hover:bg-predicted/20"
-            >
-              Failure test: change Stripe behind our back
-            </button>
+            {report.tool === "refund.bulk" && (
+              <button
+                onClick={onDrift}
+                className="rounded border border-predicted/40 bg-predicted-dim px-3 py-2 text-xs font-medium text-predicted transition hover:bg-predicted/20"
+              >
+                Failure test: change Stripe behind our back
+              </button>
+            )}
           </div>
 
-          <p className="text-xs leading-relaxed text-faint">
+          <p className="text-xs leading-relaxed text-faint" hidden={report.tool !== "refund.bulk"}>
             The failure test issues a refund directly in Stripe, the way a support agent would.
             The forecast you just approved becomes stale, and nothing in this database knows it.
             Execute afterwards to watch the canary catch it.
@@ -549,7 +554,8 @@ function Execution({
             {halted ? "HALTED BY THE CIRCUIT BREAKER" : "EXECUTED"}
           </span>
           <span className="font-mono text-xs text-muted">
-            {exec.totals.orders} order(s) refunded · {money(exec.totals.cents)}
+            {exec.totals.entities} {exec.noun}(s) {exec.noun === "order" ? "refunded" : "purged"}
+            {exec.totals.cents > 0 && ` · ${money(exec.totals.cents)}`}
             {exec.untouched > 0 && ` · ${exec.untouched} never touched`}
           </span>
         </div>

@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { db } from "@/lib/db";
 
 /**
@@ -60,42 +60,4 @@ export async function createApproval(args: {
     token,
     expiresAt: new Date(row.expires_at as string).toISOString(),
   };
-}
-
-/**
- * A cheap pre-check so the UI can explain *why* an approval is unusable before
- * the database refuses it. The database check remains authoritative.
- */
-export async function inspectApproval(
-  runId: string,
-  token: string
-): Promise<{ usable: boolean; reason?: string; planHash?: string }> {
-  const sql = db();
-  const tokenHash = hashToken(token);
-
-  const [row] = await sql`
-    select plan_hash, token_hash, consumed_at, expires_at
-      from preflight.approvals
-     where run_id = ${runId}::uuid
-     order by approved_at desc
-     limit 1`;
-
-  if (!row) return { usable: false, reason: "This run has never been approved." };
-
-  if (!safeEqual(String(row.token_hash), tokenHash)) {
-    return { usable: false, reason: "This approval token does not match this run." };
-  }
-
-  if (row.consumed_at) return { usable: false, reason: "This approval has already been used." };
-  if (new Date(row.expires_at as string) < new Date())
-    return { usable: false, reason: "This approval has expired." };
-
-  return { usable: true, planHash: String(row.plan_hash) };
-}
-
-function safeEqual(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ba.length !== bb.length) return false;
-  return timingSafeEqual(ba, bb);
 }

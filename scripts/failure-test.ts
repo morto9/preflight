@@ -79,7 +79,7 @@ async function main() {
 
   console.log(`status=${exec.status}`);
   if (exec.haltReason) console.log(`halt reason: ${exec.haltReason}`);
-  console.log(`refunded: ${exec.totals.orders} order(s), ${money(exec.totals.cents)}`);
+  console.log(`refunded: ${exec.totals.entities} order(s), ${money(exec.totals.cents)}`);
   console.log(`orders never touched: ${exec.untouched}`);
 
   console.log("\nstages:");

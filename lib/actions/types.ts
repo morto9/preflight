@@ -9,12 +9,21 @@ export type ActionCtx = {
 
 /**
  * One entity the plan touches, described well enough that a human can judge it
- * without reading SQL. `before`/`after` drive the diff view.
+ * without reading SQL.
+ *
+ * `from`/`to`/`delta` are what the diff table renders, so they are plain strings
+ * chosen by each action rather than a shape the UI has to know about. `before`
+ * and `after` carry the fuller row state behind them.
  */
 export type Impact = {
   id: string;
   label: string;
   who: string;
+  /** Rendered in the diff table's before → after columns. */
+  from: string;
+  to: string;
+  /** The right-hand column: the magnitude or nature of the change. */
+  delta: string;
   amountCents?: number;
   before: Record<string, unknown>;
   after: Record<string, unknown>;

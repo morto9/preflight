@@ -189,6 +189,9 @@ export function buildImpacts(targets: RefundTarget[]): Impact[] {
       id: t.orderId,
       label: t.reference,
       who: `${t.customerName} <${t.customerEmail}>`,
+      from: money(t.alreadyRefundedCents),
+      to: money(after),
+      delta: t.refundCents > 0 ? `+${money(t.refundCents)}` : "—",
       amountCents: t.refundCents,
       before: {
         status: statusFor(t.alreadyRefundedCents, t.amountCents),

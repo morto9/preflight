@@ -57,6 +57,20 @@ export const PRESETS = [
       },
     },
   },
+  {
+    id: "purge-dormant",
+    label: "Delete dormant customers",
+    intent: "Delete every customer who has not ordered since 2024",
+    hint: "The delete drags dependent rows out with it, and Postgres refuses it outright.",
+    plan: {
+      tool: "customers.purge" as const,
+      params: {
+        selector: { inactiveSince: "2024-01-01" },
+        strategy: "hard_delete" as const,
+        excludeCustomerIds: [] as string[],
+      },
+    },
+  },
 ] as const;
 
 export type Preset = (typeof PRESETS)[number];

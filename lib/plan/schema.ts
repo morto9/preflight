@@ -57,15 +57,6 @@ export const ActionPlan = z.discriminatedUnion("tool", [
 export type ActionPlan = z.infer<typeof ActionPlan>;
 export type ToolName = ActionPlan["tool"];
 
-export const TOOL_LABELS: Record<ToolName, string> = {
-  "refund.bulk": "Bulk refund",
-  "customers.purge": "Purge customers",
-  "notify.broadcast": "Broadcast notification",
-};
-
-/** Tools whose effects reach a system we do not control. */
-export const IRREVERSIBLE_TOOLS: ToolName[] = ["refund.bulk", "notify.broadcast"];
-
 /**
  * Deterministic JSON with sorted keys, so that two structurally identical plans
  * always hash the same regardless of property order.

@@ -57,11 +57,6 @@ export function asPgFailure(e: unknown): PgFailure {
   };
 }
 
-/** True when Postgres refused a write because the gate was closed. */
-export function isGateRefusal(e: PgFailure): boolean {
-  return e.code === "P0001" && e.message.includes("PREFLIGHT:");
-}
-
 /**
  * postgres.js can hand back jsonb as a raw string when running unprepared
  * through the transaction pooler, so every jsonb read goes through this.

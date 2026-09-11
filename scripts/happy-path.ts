@@ -69,7 +69,7 @@ async function main() {
   const exec = await execute({ runId: second.runId, token: grant.token });
 
   console.log(`status=${exec.status}`);
-  console.log(`refunded ${exec.totals.orders} order(s), ${money(exec.totals.cents)}`);
+  console.log(`refunded ${exec.totals.entities} order(s), ${money(exec.totals.cents)}`);
   for (const s of exec.stages) {
     console.log(`  stage ${s.stage} ${s.kind.padEnd(6)} ${s.status.padEnd(11)} ${s.refundIds.length} stripe refund(s)`);
   }

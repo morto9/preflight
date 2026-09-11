@@ -73,10 +73,37 @@ mode and the UI says so rather than pretending. Without Gemini, the preset inten
 still work and consequences fall back to a rule-based summary.
 
 ```bash
-npm test                       # 13 tests, against the real database
+npm test                          # 16 tests, against the real database
 npx tsx scripts/failure-test.ts   # the divergence demo
 npx tsx scripts/happy-path.ts     # blocked → tweak → execute → roll back
+npx tsx scripts/purge.ts          # the second gated action
 ```
+
+## Two gated actions, two ways to be wrong
+
+The actions are deliberately unalike, because the interesting claim is that
+simulation catches *different kinds* of surprise.
+
+**`refund.bulk`** moves real money through Stripe. It is blocked by a policy
+somebody wrote down — a daily refund ceiling — and the interesting failure is
+temporal: the forecast goes stale between approval and execution.
+
+**`customers.purge`** is blocked by the shape of the data itself. Nothing in
+"delete customers who haven't ordered since 2024" tells you that it drags 6
+dependent rows out with it, or that one of those customers has a retained
+invoice. The dry run discovers both:
+
+```
+[block] The database refused this write
+        violates foreign key constraint "invoices_customer_id_fkey"
+        Key (id)=(ffc3b033…) is still referenced from table "invoices"
+[block] Customers with retained invoices → remedy: Archive instead of deleting
+[warn]  Deleting 2 customer(s) also removes 6 dependent record(s)
+        that were never named in the request  {orders: 3, ledger_entries: 3}
+```
+
+One click on the remedy switches the strategy to a reversible archive, and the
+plan goes green.
 
 ## How it works
 
@@ -139,9 +166,9 @@ assumed; Gemini won on free-tier request volume and structured-output support.
 ### Out of scope
 
 No authentication or RBAC — a single demo operator persona. No general-purpose
-policy DSL; invariants are TypeScript. `customers.purge` and `notify.broadcast`
-are modelled in the schema, the plan types, and the policy engine, but only
-`refund.bulk` is wired end to end through the gateway — the hero action was
-finished properly in preference to leaving three actions half-connected. Real
-money is never moved: Stripe test mode only. The verifier covers drift, row-count
-and target-set divergence; it does not model concurrent DDL or replication lag.
+policy DSL; invariants are TypeScript. `notify.broadcast` is modelled in the
+schema, plan types and policy engine but is not wired through the gateway; the
+two actions that are wired were finished properly in preference to leaving three
+half-connected. Real money is never moved: Stripe test mode only. The verifier
+covers drift, row-count and target-set divergence; it does not model concurrent
+DDL or replication lag.

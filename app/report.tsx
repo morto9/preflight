@@ -97,12 +97,24 @@ export function Verdict({ report }: { report: SimulationReport }) {
       <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Stat label="Matched" value={String(report.summary.matched)} />
         <Stat label="Acting on" value={String(report.summary.acting)} />
-        <Stat
-          label="Money moving"
-          value={money(report.summary.moneyCents)}
-          tone={blocked ? "text-block" : "text-proven"}
-        />
-        <Stat label="Rows changed" value={String(report.proven.changeCount)} />
+        {report.summary.moneyCents > 0 ? (
+          <Stat
+            label="Money moving"
+            value={money(report.summary.moneyCents)}
+            tone={blocked ? "text-block" : "text-proven"}
+          />
+        ) : (
+          <Stat
+            label="Unnamed effects"
+            value={String(report.proven.unnamedEffects.reduce((n, u) => n + u.rows, 0))}
+            tone={blocked ? "text-block" : "text-predicted"}
+          />
+        )}
+        {report.proven.failure ? (
+          <Stat label="Outcome" value="refused" tone="text-block" />
+        ) : (
+          <Stat label="Rows changed" value={String(report.proven.changeCount)} />
+        )}
       </div>
     </div>
   );
@@ -127,9 +139,17 @@ export function Evidence({ report }: { report: SimulationReport }) {
               <dd className="font-mono text-ink">{rows} rows</dd>
             </div>
           ))}
-          {report.proven.changeCount === 0 && (
-            <p className="text-sm text-muted">This plan changes nothing.</p>
-          )}
+          {report.proven.changeCount === 0 &&
+            (report.proven.failure ? (
+              <p className="text-sm leading-relaxed text-muted">
+                Nothing changed, because the database{" "}
+                <span className="text-block">refused the write outright</span>. The constraint
+                that stopped it is in the policy section below — this is a fact about the data,
+                discovered by attempting the write rather than by asking.
+              </p>
+            ) : (
+              <p className="text-sm text-muted">This plan changes nothing.</p>
+            ))}
         </dl>
 
         {report.proven.unnamedEffects.length > 0 && (
@@ -147,7 +167,7 @@ export function Evidence({ report }: { report: SimulationReport }) {
           </div>
         )}
 
-        {report.stripe.enabled && (
+        {report.stripe.enabled && report.stripe.charges > 0 && (
           <p className="mt-4 border-t border-line-soft pt-3 text-xs text-muted">
             Reconciled {report.stripe.charges} charge(s) against Stripe.{" "}
             {report.stripe.drifted > 0 ? (
@@ -293,10 +313,17 @@ function InvariantRow({
 
 /* ---------------------------------------------------------------------- diff */
 
+const DIFF_HEADERS: Record<string, [string, string, string, string, string]> = {
+  "refund.bulk": ["Order", "Customer", "Refunded", "After", "Change"],
+  "customers.purge": ["Customer", "Contact", "Status", "After", "Effect"],
+  "notify.broadcast": ["Recipient", "Contact", "State", "After", "Effect"],
+};
+
 export function Diff({ report }: { report: SimulationReport }) {
   const [showSkipped, setShowSkipped] = useState(false);
   const rows = showSkipped ? report.impacts : report.impacts.filter((i) => !i.skipped);
   const skipped = report.impacts.length - report.impacts.filter((i) => !i.skipped).length;
+  const [h1, h2, h3, h4, h5] = DIFF_HEADERS[report.tool] ?? DIFF_HEADERS["refund.bulk"];
 
   return (
     <Panel
@@ -308,12 +335,12 @@ export function Diff({ report }: { report: SimulationReport }) {
         <table className="w-full min-w-[640px] border-collapse text-sm">
           <thead>
             <tr className="border-b border-line text-[11px] uppercase tracking-wider text-faint">
-              <th className="px-4 py-2 text-left font-medium">Order</th>
-              <th className="px-2 py-2 text-left font-medium">Customer</th>
-              <th className="px-2 py-2 text-right font-medium">Refunded</th>
+              <th className="px-4 py-2 text-left font-medium">{h1}</th>
+              <th className="px-2 py-2 text-left font-medium">{h2}</th>
+              <th className="px-2 py-2 text-right font-medium">{h3}</th>
               <th className="px-2 py-2 text-center font-medium" />
-              <th className="px-2 py-2 text-right font-medium">After</th>
-              <th className="px-4 py-2 text-right font-medium">Change</th>
+              <th className="px-2 py-2 text-right font-medium">{h4}</th>
+              <th className="px-4 py-2 text-right font-medium">{h5}</th>
             </tr>
           </thead>
           <tbody>
@@ -328,20 +355,14 @@ export function Diff({ report }: { report: SimulationReport }) {
                 <td className="max-w-[180px] truncate px-2 py-2 text-xs text-muted">
                   {String(i.who).split(" <")[0]}
                 </td>
-                <td className="px-2 py-2 text-right font-mono text-xs text-block">
-                  {String(i.before.refunded)}
-                </td>
+                <td className="px-2 py-2 text-right font-mono text-xs text-block">{i.from}</td>
                 <td className="px-2 py-2 text-center font-mono text-xs text-faint">→</td>
-                <td className="px-2 py-2 text-right font-mono text-xs text-proven">
-                  {String(i.after.refunded)}
-                </td>
+                <td className="px-2 py-2 text-right font-mono text-xs text-proven">{i.to}</td>
                 <td className="px-4 py-2 text-right">
                   {i.skipped ? (
                     <span className="text-[11px] text-faint">{i.skipped}</span>
                   ) : (
-                    <span className="font-mono text-xs text-ink">
-                      +{money(i.amountCents ?? 0)}
-                    </span>
+                    <span className="font-mono text-xs text-ink">{i.delta}</span>
                   )}
                 </td>
               </tr>
