@@ -41,42 +41,58 @@ function modelChain(): string[] {
   return [...new Set([primary, ...rest].map((m) => m.trim()).filter(Boolean))];
 }
 
-export type Exhaustion = { model: string; detail: string };
+export type ModelFailure = { model: string; status: number | null; detail: string };
 
-export class QuotaExhausted extends Error {
-  constructor(public readonly exhausted: Exhaustion[]) {
+/**
+ * Every model in the chain failed.
+ *
+ * Carries each one's status and body rather than collapsing to a single string,
+ * because the remedies are not the same -- wait a day, load credit, fix the
+ * key's API restrictions, retry -- and "the model is unavailable" flattens all
+ * of them into a shrug. That flattening is what let a billing state read as a
+ * busy afternoon for a day.
+ */
+export class GeminiUnavailable extends Error {
+  constructor(public readonly failures: ModelFailure[]) {
     super(
-      "Every configured model returned 429: " +
-        exhausted.map((e) => `${e.model} (${e.detail})`).join("; ")
+      "Every configured model failed: " +
+        failures.map((f) => `${f.model} ${f.status ?? "network"} (${f.detail})`).join("; ")
     );
   }
 
-  /**
-   * Why it ran out, because the remedies are not the same. A depleted prepaid
-   * balance is a billing action; a daily cap is a wait; a rate limit is a
-   * retry. Saying "quota" for all three is how a billing problem gets mistaken
-   * for a busy afternoon.
-   */
-  get reason(): "credits" | "daily-quota" | "rate" {
-    const text = this.exhausted.map((e) => e.detail).join(" ").toLowerCase();
-    if (/prepay|billing|credits?/.test(text)) return "credits";
-    if (text.includes("perday")) return "daily-quota";
-    return "rate";
+  get reason(): "credits" | "blocked" | "daily-quota" | "rate" | "unreachable" {
+    const text = this.failures.map((f) => f.detail).join(" ").toLowerCase();
+
+    // Project- and key-level states hold for the whole chain even when only one
+    // model got far enough to report them, so they are read before any tally.
+    if (/prepay|billing/.test(text)) return "credits";
+    if (/api_key_service_blocked|permission_denied|api key not valid/.test(text)) return "blocked";
+
+    if (this.failures.every((f) => f.status === 429)) {
+      return text.includes("perday") ? "daily-quota" : "rate";
+    }
+    return "unreachable";
   }
 }
 
-/** The most specific thing the 429 body will tell us. */
-function quotaDetail(body: string): string {
-  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+/** The most specific thing an error body will tell us. */
+function failureDetail(body: string): string {
+  const flat = (t: string) => t.replace(/\s+/g, " ").trim();
   try {
     const j = JSON.parse(body) as {
-      error?: { message?: string; details?: { violations?: { quotaId?: string; quotaValue?: string }[] }[] };
+      error?: {
+        message?: string;
+        details?: { reason?: string; violations?: { quotaId?: string; quotaValue?: string }[] }[];
+      };
     };
     const v = j.error?.details?.find((d) => d?.violations)?.violations?.[0];
     if (v?.quotaId) return `${v.quotaId} limit=${v.quotaValue ?? "?"}`;
-    if (j.error?.message) return flat(j.error.message).slice(0, 180);
+    const reason = j.error?.details?.find((d) => d?.reason)?.reason ?? "";
+    const message = j.error?.message ? flat(j.error.message) : "";
+    const joined = [reason, message].filter(Boolean).join(": ");
+    if (joined) return joined.slice(0, 200);
   } catch {}
-  return flat(body).slice(0, 180) || "429 with no detail";
+  return flat(body).slice(0, 200) || "no detail";
 }
 
 async function callGemini(
@@ -98,8 +114,7 @@ async function callGemini(
   };
 
   const chain = modelChain();
-  const exhausted: Exhaustion[] = [];
-  let lastError = "";
+  const failures: ModelFailure[] = [];
 
   for (const model of chain) {
     let res: Response;
@@ -111,20 +126,18 @@ async function callGemini(
         signal: AbortSignal.timeout(30_000),
       });
     } catch (e) {
-      lastError = `${model}: ${e instanceof Error ? e.message : String(e)}`;
+      failures.push({ model, status: null, detail: e instanceof Error ? e.message : String(e) });
       continue;
     }
 
-    // Quota is per model, so this one being spent says nothing about the next.
-    // Keep the body: it is the difference between "wait until tomorrow" and
-    // "the account has no credit".
-    if (res.status === 429) {
-      exhausted.push({ model, detail: quotaDetail(await res.text().catch(() => "")) });
-      continue;
-    }
-
+    // Quota is metered per model, so one being spent says nothing about the
+    // next -- every failure is recorded and the chain keeps walking.
     if (!res.ok) {
-      lastError = `${model}: ${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`;
+      failures.push({
+        model,
+        status: res.status,
+        detail: failureDetail(await res.text().catch(() => "")),
+      });
       continue;
     }
 
@@ -133,15 +146,14 @@ async function callGemini(
     };
     const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) {
-      lastError = `${model}: returned no content`;
+      failures.push({ model, status: res.status, detail: "returned no content" });
       continue;
     }
 
     return { data: JSON.parse(text), model };
   }
 
-  if (exhausted.length === chain.length) throw new QuotaExhausted(exhausted);
-  throw new Error(`Gemini unavailable -- ${lastError}`);
+  throw new GeminiUnavailable(failures);
 }
 
 // ---------------------------------------------------------------------------
@@ -475,16 +487,19 @@ export async function consequencesFor(report: SimulationReport): Promise<Consequ
 /** Say which failure this was, in terms an operator can act on. */
 function degradedReason(e: unknown): string {
   const tail = ", so this is a rules-based summary rather than a model's reasoning.";
-  if (!(e instanceof QuotaExhausted)) {
-    return "The model could not be reached" + tail;
-  }
+  if (!(e instanceof GeminiUnavailable)) return "The model could not be reached" + tail;
+
   switch (e.reason) {
     case "credits":
       return "The Gemini project has no prepaid credit left" + tail;
+    case "blocked":
+      return "This API key is not permitted to call the Gemini API" + tail;
     case "daily-quota":
       return "Every configured model has spent its daily request quota" + tail;
-    default:
+    case "rate":
       return "Every configured model is rate limited right now" + tail;
+    default:
+      return "The model could not be reached" + tail;
   }
 }
 

@@ -182,10 +182,12 @@ credit is actually loaded. That is strictly worse than the free tier it
 replaced, and it fails identically across every model, so the per-model chain
 cannot route around it either.
 
-Which is why the fallback now names the state it is in. `QuotaExhausted`
-carries the 429 body and classifies it as depleted credit, a spent daily cap,
-or a rate limit, because an operator does something different about each and
-"quota exceeded" flattens all three into a shrug.
+Which is why the fallback now names the state it is in. `GeminiUnavailable`
+carries every model's status and body and classifies the result as depleted
+credit, a key barred from the API, a spent daily cap, a rate limit, or simply
+unreachable. An operator does something different about each, and project- or
+key-level states are read before any tally, so one odd status among the
+failures cannot downgrade a definite diagnosis into "could not be reached".
 
 ### Key decisions
 
