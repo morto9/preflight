@@ -15,7 +15,12 @@ const dir = join(here, "migrations");
 
 const url = process.env.DATABASE_URL;
 if (!url) {
-  console.error("DATABASE_URL is not set. Copy .env.example to .env.local first.");
+  console.error(
+    "DATABASE_URL is not set.\n" +
+      "  Copy .env.example to .env.local, then fill in DATABASE_URL.\n" +
+      "  Supabase dashboard -> Connect -> Transaction pooler (port 6543).\n" +
+      "  The direct connection string is IPv6-only and will not work from Vercel."
+  );
   process.exit(1);
 }
 
