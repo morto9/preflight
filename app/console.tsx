@@ -749,7 +749,7 @@ function Execution({
               >
                 {s.status === "not_reached" ? "never ran" : s.status}
               </Badge>
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted">
+              <span className="order-last w-full truncate font-mono text-xs text-muted sm:order-none sm:w-auto sm:min-w-0 sm:flex-1">
                 {s.references.join("  ")}
               </span>
               {s.refundIds.length > 0 && (
@@ -840,8 +840,8 @@ function LiveExecution({ stages, halt }: { stages: LiveStage[]; halt: string | n
 
   return (
     <section className="mt-6 rounded-lg border border-line bg-panel slide-up">
-      <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
-        <h3 className="text-sm font-semibold text-ink">Executing</h3>
+      <header className="flex flex-col gap-0.5 border-b border-line px-4 py-2.5 sm:flex-row sm:items-center sm:gap-2">
+        <h3 className="shrink-0 text-sm font-semibold text-ink">Executing</h3>
         <span className="text-xs text-muted">
           one stage at a time, checked against reality before and after each
         </span>

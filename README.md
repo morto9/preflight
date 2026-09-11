@@ -64,6 +64,10 @@ Concretely:
 - Light and dark are both first-class, following the system by default with an
   explicit override that persists. The light scale is re-chosen rather than
   inverted, and every pairing clears 4.5:1 in both themes.
+- Works on a phone. The diff becomes cards below 640px rather than a table you
+  scroll sideways, because the before/after pair is the whole point of a row
+  and splitting it across a scroll defeats it. Nothing on the page exceeds the
+  viewport at 375px.
 
 ## Quickstart
 

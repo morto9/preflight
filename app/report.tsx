@@ -413,8 +413,10 @@ export function History({
 
   return (
     <section className="mt-6 rounded-lg border border-line bg-panel">
-      <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
-        <h3 className="text-sm font-semibold text-ink">This sandbox&rsquo;s runs</h3>
+      <header className="flex flex-col gap-0.5 border-b border-line px-4 py-2.5 sm:flex-row sm:items-center sm:gap-2">
+        <h3 className="shrink-0 text-sm font-semibold whitespace-nowrap text-ink">
+          This sandbox&rsquo;s runs
+        </h3>
         <span className="text-xs text-faint">
           every simulation is a durable record, not a screen that disappears
         </span>
@@ -427,14 +429,20 @@ export function History({
               r.id === currentRunId ? "bg-panel-2/70" : ""
             }`}
           >
-            <span className={`w-24 shrink-0 font-mono text-[11px] ${tone[r.status] ?? "text-muted"}`}>
+            <span className={`w-20 shrink-0 font-mono text-[11px] ${tone[r.status] ?? "text-muted"}`}>
               {r.status}
             </span>
-            <span className="min-w-0 flex-1 truncate text-xs text-muted">
+            {/*
+              On a phone the intent drops to its own full-width line rather than
+              being truncated to "Refund ev…", which told the reader nothing.
+            */}
+            <span className="order-last w-full truncate text-xs text-muted sm:order-none sm:w-auto sm:min-w-0 sm:flex-1">
               {r.intent ?? "(no intent recorded)"}
             </span>
-            <code className="font-mono text-[10px] text-faint">{r.planHash.slice(0, 8)}</code>
-            <time className="font-mono text-[10px] text-faint">
+            <code className="shrink-0 font-mono text-[10px] text-faint">
+              {r.planHash.slice(0, 8)}
+            </code>
+            <time className="shrink-0 font-mono text-[10px] text-faint">
               {new Date(r.createdAt).toLocaleTimeString()}
             </time>
           </li>
@@ -578,7 +586,75 @@ export function Diff({
       badge={<Badge tone="proven">Proven</Badge>}
       subtitle="Every row this plan touches, before and after, taken from the rolled-back transaction. Untick anything you do not want and re-simulate."
     >
-      <div className="-mx-4 overflow-x-auto">
+      {/*
+        On a phone the table would be 680px against a 375px viewport: you would
+        read the "before" column and have to scroll sideways to reach "after",
+        which is the one comparison the row exists to make. Cards keep the pair
+        together.
+      */}
+      <ul className="space-y-2 sm:hidden">
+        {rows.map((i) => {
+          const off = excluded.has(i.id);
+          const can = toggleable(i);
+          const inert = off || (i.skipped && i.skipped !== DESELECTED);
+
+          return (
+            <li
+              key={i.id}
+              onClick={() => can && !busy && toggle(i.id)}
+              className={`rounded border border-line-soft p-3 ${inert ? "opacity-50" : ""} ${
+                can && !busy ? "cursor-pointer" : ""
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={!off}
+                  disabled={!can || busy}
+                  onChange={() => toggle(i.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={`Include ${i.label}`}
+                  className="h-4 w-4 shrink-0 accent-proven"
+                />
+                <span className="font-mono text-xs text-ink">{i.label}</span>
+                <span className="ml-auto shrink-0 font-mono text-xs text-ink">
+                  {off ? (
+                    <span className="text-faint">excluded</span>
+                  ) : i.skipped ? (
+                    <span className="text-[11px] text-faint">{i.skipped}</span>
+                  ) : (
+                    i.delta
+                  )}
+                </span>
+              </div>
+
+              <div className="mt-1.5 truncate pl-6 text-xs text-muted">
+                {String(i.who).split(" <")[0]}
+              </div>
+
+              <div className="mt-2 flex items-center gap-2 pl-6 font-mono text-xs">
+                <span
+                  className={`rounded px-2 py-0.5 ${
+                    inert ? "text-faint" : "bg-diff-remove text-block"
+                  }`}
+                >
+                  {i.from}
+                </span>
+                <span className="text-faint">→</span>
+                <span
+                  className={`rounded px-2 py-0.5 ${
+                    inert ? "text-faint" : "bg-diff-add text-proven"
+                  }`}
+                >
+                  {off ? "—" : i.to}
+                </span>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="-mx-4 hidden overflow-x-auto sm:block">
         <table className="w-full min-w-[680px] border-collapse text-sm">
           <thead>
             <tr className="border-b border-line text-[11px] uppercase tracking-wider text-faint">
