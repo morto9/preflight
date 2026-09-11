@@ -155,9 +155,12 @@ canary catches it, **$0.00 moves**, and thirteen orders are never reached.
 
 Built with Claude (Claude Code) doing the implementation end to end — schema
 design, the gateway, the UI, and the docs — driven by an approved written plan.
-Gemini 2.5 Flash runs inside the product itself as the planner and the consequence
-model. Model choice was researched against live free-tier limits rather than
-assumed; Gemini won on free-tier request volume and structured-output support.
+Gemini runs inside the product itself as the planner and the consequence model,
+chosen for native structured output (`responseSchema`) against a Zod-mirrored
+plan schema. It was *not* the right call on request volume: I picked it partly
+on a widely-repeated free-tier figure that turned out to be about seventy times
+the enforced one. Groq offers materially more free daily requests, and the
+provider seam is deliberately narrow enough to swap.
 
 ### On the Gemini free tier
 
@@ -172,8 +175,17 @@ answer instead of spending a request each. Quota is per model, so the client
 walks a chain and moves on when one is spent. And when it genuinely runs out,
 the panel says so rather than quietly serving a weaker answer.
 
-Attaching Cloud Billing lifts the limit entirely, and a Google AI Pro
-subscription includes $10/month of Cloud credits that covers it.
+Attaching billing is not automatically the escape hatch. Doing it here moved
+the key onto AI Studio's **prepaid** plan, which gives up free-tier access and
+then refuses every request -- `Your prepayment credits are depleted` -- until
+credit is actually loaded. That is strictly worse than the free tier it
+replaced, and it fails identically across every model, so the per-model chain
+cannot route around it either.
+
+Which is why the fallback now names the state it is in. `QuotaExhausted`
+carries the 429 body and classifies it as depleted credit, a spent daily cap,
+or a rate limit, because an operator does something different about each and
+"quota exceeded" flattens all three into a shrug.
 
 ### Key decisions
 

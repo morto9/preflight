@@ -41,10 +41,42 @@ function modelChain(): string[] {
   return [...new Set([primary, ...rest].map((m) => m.trim()).filter(Boolean))];
 }
 
+export type Exhaustion = { model: string; detail: string };
+
 export class QuotaExhausted extends Error {
-  constructor(public readonly models: string[]) {
-    super(`Every configured model has exhausted its free daily quota: ${models.join(", ")}`);
+  constructor(public readonly exhausted: Exhaustion[]) {
+    super(
+      "Every configured model returned 429: " +
+        exhausted.map((e) => `${e.model} (${e.detail})`).join("; ")
+    );
   }
+
+  /**
+   * Why it ran out, because the remedies are not the same. A depleted prepaid
+   * balance is a billing action; a daily cap is a wait; a rate limit is a
+   * retry. Saying "quota" for all three is how a billing problem gets mistaken
+   * for a busy afternoon.
+   */
+  get reason(): "credits" | "daily-quota" | "rate" {
+    const text = this.exhausted.map((e) => e.detail).join(" ").toLowerCase();
+    if (/prepay|billing|credits?/.test(text)) return "credits";
+    if (text.includes("perday")) return "daily-quota";
+    return "rate";
+  }
+}
+
+/** The most specific thing the 429 body will tell us. */
+function quotaDetail(body: string): string {
+  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+  try {
+    const j = JSON.parse(body) as {
+      error?: { message?: string; details?: { violations?: { quotaId?: string; quotaValue?: string }[] }[] };
+    };
+    const v = j.error?.details?.find((d) => d?.violations)?.violations?.[0];
+    if (v?.quotaId) return `${v.quotaId} limit=${v.quotaValue ?? "?"}`;
+    if (j.error?.message) return flat(j.error.message).slice(0, 180);
+  } catch {}
+  return flat(body).slice(0, 180) || "429 with no detail";
 }
 
 async function callGemini(
@@ -66,7 +98,7 @@ async function callGemini(
   };
 
   const chain = modelChain();
-  const exhausted: string[] = [];
+  const exhausted: Exhaustion[] = [];
   let lastError = "";
 
   for (const model of chain) {
@@ -84,8 +116,10 @@ async function callGemini(
     }
 
     // Quota is per model, so this one being spent says nothing about the next.
+    // Keep the body: it is the difference between "wait until tomorrow" and
+    // "the account has no credit".
     if (res.status === 429) {
-      exhausted.push(model);
+      exhausted.push({ model, detail: quotaDetail(await res.text().catch(() => "")) });
       continue;
     }
 
@@ -413,16 +447,26 @@ export async function consequencesFor(report: SimulationReport): Promise<Consequ
     await writeCache(key, fresh);
     return fresh;
   } catch (e) {
-    const spent = e instanceof QuotaExhausted;
     console.error(
       "[preflight] consequence model failed, falling back to rules:",
       e instanceof Error ? e.message : String(e)
     );
-    return {
-      ...ruleBasedConsequences(report),
-      degraded: spent
-        ? "Every model has spent its free daily quota, so this is a rules-based summary rather than a model's reasoning."
-        : "The model could not be reached, so this is a rules-based summary.",
-    };
+    return { ...ruleBasedConsequences(report), degraded: degradedReason(e) };
+  }
+}
+
+/** Say which failure this was, in terms an operator can act on. */
+function degradedReason(e: unknown): string {
+  const tail = ", so this is a rules-based summary rather than a model's reasoning.";
+  if (!(e instanceof QuotaExhausted)) {
+    return "The model could not be reached" + tail;
+  }
+  switch (e.reason) {
+    case "credits":
+      return "The Gemini project has no prepaid credit left" + tail;
+    case "daily-quota":
+      return "Every configured model has spent its daily request quota" + tail;
+    default:
+      return "Every configured model is rate limited right now" + tail;
   }
 }
