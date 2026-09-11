@@ -1,4 +1,4 @@
-import { db, asJson, type PgFailure } from "@/lib/db";
+import { db, asJson, jsonb, type PgFailure } from "@/lib/db";
 import {
   dryRun,
   executeFirstStage,
@@ -126,7 +126,7 @@ export async function simulate(args: {
 
   const [runRow] = await sql`
     insert into preflight.runs (tenant_id, intent, plan, plan_hash, status)
-    values (${args.tenantId}, ${args.intent ?? null}, ${JSON.stringify(plan)}::jsonb, ${hash}, 'simulated')
+    values (${args.tenantId}, ${args.intent ?? null}, ${jsonb(plan)}, ${hash}, 'simulated')
     returning id, created_at`;
 
   const runId = String(runRow.id);
@@ -188,7 +188,7 @@ export async function simulate(args: {
 
   await sql`
     update preflight.runs
-       set simulation = ${JSON.stringify(report)}::jsonb, updated_at = now()
+       set simulation = ${jsonb(report)}, updated_at = now()
      where id = ${runId}::uuid`;
 
   return report;
@@ -648,9 +648,9 @@ async function writeReceipt(
     insert into preflight.receipts (run_id, stage, pre_images, compensating, external_effects)
     values (
       ${runId}::uuid, ${stage},
-      ${JSON.stringify(changes)}::jsonb,
-      ${JSON.stringify(compensation)}::jsonb,
-      ${JSON.stringify(external)}::jsonb
+      ${jsonb(changes)},
+      ${jsonb(compensation)},
+      ${jsonb(external)}
     )
     returning id`;
   return String(row.id);

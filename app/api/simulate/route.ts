@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { simulate } from "@/lib/gateway";
 import { ActionPlan } from "@/lib/plan/schema";
-import { consequencesFor } from "@/lib/llm/gemini";
 import { currentTenant, touchTenant } from "@/lib/session";
 import { findPreset } from "@/lib/presets";
 
@@ -38,15 +37,15 @@ export async function POST(req: Request) {
   try {
     await touchTenant(tenantId);
 
+    // Returns without consequences on purpose. Everything here is evidence the
+    // gateway produced itself, and it should reach the operator immediately
+    // rather than waiting on a model. The client fetches the prediction
+    // separately into its own panel; see app/api/consequences.
     const report = await simulate({
       tenantId,
       plan: parsed.data,
       intent: source?.intent ?? body.intent,
     });
-
-    // The consequence model is advisory. It must never break a simulation, and
-    // its output is labelled as a prediction in the UI.
-    report.consequences = await consequencesFor(report);
 
     return NextResponse.json(report);
   } catch (e) {

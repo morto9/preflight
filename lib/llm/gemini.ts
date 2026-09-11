@@ -201,9 +201,20 @@ const CONSEQUENCE_SCHEMA = {
 export async function predictConsequences(
   report: SimulationReport
 ): Promise<Consequences> {
-  const prompt = `A simulation has already PROVEN what happens inside the database by
-performing the write in a transaction and rolling it back. Do not repeat those
-facts. Your job is the effects the database cannot see.
+  const prompt = `NOTHING HAS HAPPENED YET. This is a proposal awaiting a human decision.
+The write was performed only inside a database transaction that was then rolled
+back, so no money has moved, no record has changed, and no message has been
+sent. Write in the conditional: what WOULD follow if an operator approved this.
+Never state that anything has already been processed, refunded, deleted or sent.
+
+The plan's current verdict is: ${report.verdict.toUpperCase()}.${
+    report.verdict === "blocked"
+      ? " A blocked plan cannot run as written, so describe what the operator should weigh if they revise it to pass, not the effects of an action that is currently forbidden."
+      : ""
+  }
+
+A simulation has already PROVEN what happens inside the database. Do not repeat
+those facts. Your job is the effects the database cannot see.
 
 Proven database effects:
 ${JSON.stringify(report.proven.tableCounts)}
@@ -222,7 +233,7 @@ Answer concisely and concretely:
 - watchFor: what would indicate this went wrong after the fact. Max 4 items.
 - confidence: 0 to 1, how sure you are this list is complete. Be honest; this is
   a prediction, not a measurement.
-- summary: one sentence an operator reads before approving.`;
+- summary: one sentence an operator reads before approving. Conditional voice.`;
 
   const raw = (await callGemini(prompt, CONSEQUENCE_SCHEMA, { thinking: true })) as {
     summary: string;

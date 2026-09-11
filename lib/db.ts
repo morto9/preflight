@@ -64,3 +64,16 @@ export function asPgFailure(e: unknown): PgFailure {
 export function asJson<T>(value: unknown): T {
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
 }
+
+/**
+ * Bind a value to a jsonb column.
+ *
+ * postgres.js turns a bare string bound into a jsonb column into a JSON
+ * *scalar* -- the document ends up wrapped in quotes, reads back as a string,
+ * and jsonb_set refuses to touch it. Objects therefore have to go through
+ * sql.json(), whose JSONValue type is narrower than our domain types, so the
+ * cast lives here once rather than at every call site.
+ */
+export function jsonb(value: unknown) {
+  return db().json(value as never);
+}

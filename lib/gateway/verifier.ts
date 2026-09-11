@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { db, jsonb } from "@/lib/db";
 import { readChargeTruths, stripeEnabled } from "@/lib/adapters/stripe";
 import { money } from "@/lib/policy/invariants";
 import type { RefundTarget } from "@/lib/actions/refund-bulk";
@@ -203,7 +203,7 @@ export async function tripBreaker(
         (run_id, stage, kind, predicted, actual, detail, severity, halted)
       values (
         ${runId}::uuid, ${stage}, ${d.kind},
-        ${JSON.stringify(d.predicted)}::jsonb, ${JSON.stringify(d.actual)}::jsonb,
+        ${jsonb(d.predicted)}, ${jsonb(d.actual)},
         ${d.detail}, ${d.severity}, true
       )`;
   }
@@ -226,7 +226,7 @@ export async function recordDivergences(
         (run_id, stage, kind, predicted, actual, detail, severity, halted)
       values (
         ${runId}::uuid, ${stage}, ${d.kind},
-        ${JSON.stringify(d.predicted)}::jsonb, ${JSON.stringify(d.actual)}::jsonb,
+        ${jsonb(d.predicted)}, ${jsonb(d.actual)},
         ${d.detail}, ${d.severity}, false
       )`;
   }

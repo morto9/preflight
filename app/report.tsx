@@ -122,7 +122,13 @@ export function Verdict({ report }: { report: SimulationReport }) {
 
 /* ------------------------------------------------------------------ evidence */
 
-export function Evidence({ report }: { report: SimulationReport }) {
+export function Evidence({
+  report,
+  predicting = false,
+}: {
+  report: SimulationReport;
+  predicting?: boolean;
+}) {
   const c = report.consequences;
 
   return (
@@ -186,7 +192,26 @@ export function Evidence({ report }: { report: SimulationReport }) {
         badge={<Badge tone="predicted">Predicted</Badge>}
         subtitle="A model's reasoning about effects outside the database. Treat as a hypothesis. It never blocks anything on its own."
       >
-        {!c ? (
+        {!c && predicting ? (
+          <div className="space-y-3">
+            <p className="pulse-soft text-sm text-muted">
+              Asking the model what happens outside the database…
+            </p>
+            <div className="space-y-2">
+              {[100, 82, 64].map((w) => (
+                <div
+                  key={w}
+                  className="pulse-soft h-2 rounded bg-line"
+                  style={{ width: `${w}%` }}
+                />
+              ))}
+            </div>
+            <p className="text-xs leading-relaxed text-faint">
+              Everything on the left is already final. Nothing here can change it, block it, or
+              hold up an approval.
+            </p>
+          </div>
+        ) : !c ? (
           <p className="text-sm text-muted">No prediction available.</p>
         ) : (
           <div className="space-y-3">

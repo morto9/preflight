@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { SimulationReport, ExecutionReport, RollbackReport } from "@/lib/gateway";
+import type {
+  SimulationReport,
+  ExecutionReport,
+  RollbackReport,
+  Consequences,
+} from "@/lib/gateway";
 import { money } from "@/lib/policy/invariants";
 import { PRESETS } from "@/lib/presets";
 import { Badge, Diff, Evidence, Invariants, Rollback, Verdict } from "./report";
@@ -65,6 +70,7 @@ export default function Console() {
   const [drift, setDrift] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [intent, setIntent] = useState("");
+  const [predicting, setPredicting] = useState(false);
   const booted = useRef(false);
 
   const refreshState = useCallback(async () => {
@@ -95,6 +101,19 @@ export default function Console() {
     })();
   }, [refreshState]);
 
+  const loadConsequences = useCallback(async (runId: string) => {
+    setPredicting(true);
+    try {
+      const c = await post<Consequences>("/api/consequences", { runId });
+      // A newer simulation may have landed while the model was still thinking.
+      setReport((cur) => (cur && cur.runId === runId ? { ...cur, consequences: c } : cur));
+    } catch {
+      // The prediction is advisory; failing to get one is not a failure state.
+    } finally {
+      setPredicting(false);
+    }
+  }, []);
+
   function resetRun() {
     setReport(null);
     setPrev(null);
@@ -115,6 +134,8 @@ export default function Console() {
       setGrant(null);
       setExec(null);
       setPhase("reviewing");
+      // Proven evidence is on screen now; the opinion can arrive late.
+      void loadConsequences(r.runId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhase(report ? "reviewing" : "idle");
@@ -260,7 +281,7 @@ export default function Console() {
         <div className="mt-6 space-y-4 slide-up">
           {prev && <PlanChanged prev={prev} next={report} />}
           <Verdict report={report} />
-          <Evidence report={report} />
+          <Evidence report={report} predicting={predicting} />
           <Invariants report={report} onRemedy={onRemedy} busy={busy} />
           <Diff report={report} />
           <Rollback report={report} />
