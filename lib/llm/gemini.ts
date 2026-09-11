@@ -347,29 +347,46 @@ function clamp(n: number): number {
 export function ruleBasedConsequences(report: SimulationReport): Consequences {
   const impacted: string[] = [];
   const sideEffects: string[] = [];
+  const watchFor: string[] = [];
+  const money_ = report.tool === "refund.bulk";
 
   const people = new Set(report.impacts.filter((i) => !i.skipped).map((i) => i.who));
-  if (people.size) impacted.push(`${people.size} customer(s) whose payment state changes`);
+  if (people.size) {
+    impacted.push(
+      money_
+        ? `${people.size} customer(s) whose payment state changes`
+        : `${people.size} customer(s) whose records are removed`
+    );
+  }
+
   if (report.external.length) {
     impacted.push("Stripe, which holds the authoritative record of these payments");
     sideEffects.push(
       `${report.external.length} refund email(s) sent by Stripe directly to customers`
     );
+    watchFor.push("Stripe balance not matching the local ledger");
   }
+
+  // The rows nobody asked for. On a purge this is the whole story, so it leads.
   for (const u of report.proven.unnamedEffects) {
     sideEffects.push(`${u.rows} row(s) written to preflight.${u.table}, which the plan never named`);
   }
+
+  watchFor.push(
+    money_
+      ? "Customers contacting support about unexpected refunds"
+      : "Support or finance referencing customer records that no longer resolve"
+  );
 
   return {
     source: "rules",
     confidence: 0.4,
     impacted,
     sideEffects,
-    watchFor: [
-      "Stripe balance not matching the local ledger",
-      "Customers contacting support about unexpected refunds",
-    ],
-    summary: `${report.summary.acting} order(s) change, moving ${money(report.summary.moneyCents)}.`,
+    watchFor,
+    summary: money_
+      ? `${report.summary.acting} order(s) change, moving ${money(report.summary.moneyCents)}.`
+      : `${report.summary.acting} customer record(s) change, plus ${report.proven.changeCount - report.summary.acting} dependent row(s).`,
   };
 }
 
