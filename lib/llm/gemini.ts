@@ -18,27 +18,63 @@ import { money } from "@/lib/policy/invariants";
  *    warn. The blocking decisions belong to the invariants, which have evidence.
  */
 
-const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
+const AI_STUDIO = "https://generativelanguage.googleapis.com/v1beta/models";
+const VERTEX_EXPRESS = "https://aiplatform.googleapis.com/v1/publishers/google/models";
 
 export function geminiEnabled(): boolean {
-  return Boolean(process.env.GEMINI_API_KEY);
+  return Boolean(process.env.VERTEX_API_KEY || process.env.GEMINI_API_KEY);
+}
+
+function list(value: string | undefined, fallback: string): string[] {
+  return [...new Set((value || fallback).split(",").map((m) => m.trim()).filter(Boolean))];
 }
 
 /**
- * Models to try, in order.
+ * One attempt: a model reached through a particular front door.
  *
- * The free tier meters requests per DAY per MODEL for the whole project -- 20
- * for gemini-2.5-flash -- so exhausting one model does not exhaust the others.
- * Walking a chain multiplies the usable allowance without changing behaviour.
+ * There are two, and they are not interchangeable. Vertex AI express mode and
+ * AI Studio take the same request body but live on different hosts, meter
+ * separately, and are authorised by different keys -- so a key blocked on one
+ * says nothing about the other. Trying both is what makes the chain survive an
+ * account-level problem rather than only a per-model one.
  */
-function modelChain(): string[] {
-  const primary = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
-  const rest = (
-    process.env.GEMINI_MODEL_FALLBACKS ||
-    "gemini-2.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash"
-  ).split(",");
+type Backend = { label: string; model: string; url: string; headers: Record<string, string> };
 
-  return [...new Set([primary, ...rest].map((m) => m.trim()).filter(Boolean))];
+function backends(): Backend[] {
+  const out: Backend[] = [];
+
+  const vertexKey = process.env.VERTEX_API_KEY;
+  if (vertexKey) {
+    for (const model of list(process.env.VERTEX_MODELS, "gemini-2.5-flash,gemini-2.5-flash-lite")) {
+      out.push({
+        label: `vertex/${model}`,
+        model,
+        url: `${VERTEX_EXPRESS}/${model}:generateContent`,
+        headers: { "content-type": "application/json", "x-goog-api-key": vertexKey },
+      });
+    }
+  }
+
+  // Quota on AI Studio is metered per day per MODEL for the whole project, so
+  // one model being spent says nothing about the next.
+  const studioKey = process.env.GEMINI_API_KEY;
+  if (studioKey) {
+    const primary = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+    const rest = list(
+      process.env.GEMINI_MODEL_FALLBACKS,
+      "gemini-2.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash"
+    );
+    for (const model of [...new Set([primary, ...rest])]) {
+      out.push({
+        label: `ai-studio/${model}`,
+        model,
+        url: `${AI_STUDIO}/${model}:generateContent`,
+        headers: { "content-type": "application/json", "x-goog-api-key": studioKey },
+      });
+    }
+  }
+
+  return out;
 }
 
 export type ModelFailure = { model: string; status: number | null; detail: string };
@@ -100,8 +136,8 @@ async function callGemini(
   responseSchema: Record<string, unknown>,
   opts: { thinking?: boolean } = {}
 ): Promise<{ data: unknown; model: string }> {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new Error("GEMINI_API_KEY is not set");
+  const chain = backends();
+  if (!chain.length) throw new Error("Neither VERTEX_API_KEY nor GEMINI_API_KEY is set");
 
   const body: Record<string, unknown> = {
     contents: [{ parts: [{ text: prompt }] }],
@@ -113,28 +149,31 @@ async function callGemini(
     },
   };
 
-  const chain = modelChain();
   const failures: ModelFailure[] = [];
 
-  for (const model of chain) {
+  for (const backend of chain) {
     let res: Response;
     try {
-      res = await fetch(`${ENDPOINT}/${model}:generateContent`, {
+      res = await fetch(backend.url, {
         method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        headers: backend.headers,
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30_000),
       });
     } catch (e) {
-      failures.push({ model, status: null, detail: e instanceof Error ? e.message : String(e) });
+      failures.push({
+        model: backend.label,
+        status: null,
+        detail: e instanceof Error ? e.message : String(e),
+      });
       continue;
     }
 
-    // Quota is metered per model, so one being spent says nothing about the
-    // next -- every failure is recorded and the chain keeps walking.
+    // Every failure is recorded and the chain keeps walking: the next entry may
+    // be a different model, or the same model behind a different key entirely.
     if (!res.ok) {
       failures.push({
-        model,
+        model: backend.label,
         status: res.status,
         detail: failureDetail(await res.text().catch(() => "")),
       });
@@ -146,11 +185,11 @@ async function callGemini(
     };
     const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) {
-      failures.push({ model, status: res.status, detail: "returned no content" });
+      failures.push({ model: backend.label, status: res.status, detail: "returned no content" });
       continue;
     }
 
-    return { data: JSON.parse(text), model };
+    return { data: JSON.parse(text), model: backend.label };
   }
 
   throw new GeminiUnavailable(failures);
