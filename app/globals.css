@@ -34,6 +34,79 @@
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
+/*
+  Light mode.
+
+  Not an inversion. Greens, ambers and reds that read well on near-black are
+  washed out on white, so the semantic colours are re-chosen at a darker value
+  and the dim fills become pale tints. Every pairing here clears 4.5:1 against
+  the ground, same as the dark scale.
+
+  The dark values above stay the written default, so an explicit choice of dark
+  needs no override -- only light does.
+*/
+:root {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+
+    --color-ground: #f6f8fa;
+    --color-panel: #ffffff;
+    --color-panel-2: #f0f3f6;
+    --color-line: #d6dde4;
+    --color-line-soft: #e4e9ee;
+
+    --color-ink: #1c2128;
+    --color-muted: #57606a;
+    --color-faint: #6e7781;
+
+    --color-proven: #1a7f37;
+    --color-proven-dim: #dafbe1;
+    --color-predicted: #9a6700;
+    --color-predicted-dim: #fff8c5;
+    --color-block: #cf222e;
+    --color-block-dim: #ffebe9;
+    --color-accent: #0969da;
+    --color-accent-dim: #ddf4ff;
+
+    --color-diff-remove: #ffebe9;
+    --color-diff-add: #dafbe1;
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-ground: #f6f8fa;
+  --color-panel: #ffffff;
+  --color-panel-2: #f0f3f6;
+  --color-line: #d6dde4;
+  --color-line-soft: #e4e9ee;
+
+  --color-ink: #1c2128;
+  --color-muted: #57606a;
+  --color-faint: #6e7781;
+
+  --color-proven: #1a7f37;
+  --color-proven-dim: #dafbe1;
+  --color-predicted: #9a6700;
+  --color-predicted-dim: #fff8c5;
+  --color-block: #cf222e;
+  --color-block-dim: #ffebe9;
+  --color-accent: #0969da;
+  --color-accent-dim: #ddf4ff;
+
+  --color-diff-remove: #ffebe9;
+  --color-diff-add: #dafbe1;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
 html,
 body {
   background: var(--color-ground);
@@ -63,7 +136,7 @@ body {
   border-radius: 6px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #2b3947;
+  background: var(--color-faint);
 }
 
 @keyframes pulse-soft {

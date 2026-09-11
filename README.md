@@ -61,6 +61,9 @@ Concretely:
   stages that never ran are visibly queued, not merely absent afterwards.
 - "42 rows changed" expands into the actual rows, showing only the fields that
   differ. Every run is kept, with its verdict and plan hash.
+- Light and dark are both first-class, following the system by default with an
+  explicit override that persists. The light scale is re-chosen rather than
+  inverted, and every pairing clears 4.5:1 in both themes.
 
 ## Quickstart
 

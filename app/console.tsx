@@ -12,6 +12,7 @@ import type { Divergence } from "@/lib/gateway/verifier";
 import { money } from "@/lib/policy/invariants";
 import { PRESETS } from "@/lib/presets";
 import { Badge, Diff, Evidence, History, Invariants, Rollback, Verdict } from "./report";
+import ThemeToggle from "./theme-toggle";
 
 type Phase =
   | "boot"
@@ -479,13 +480,16 @@ function Header({
             diff, a policy check, and a rollback receipt.
           </p>
         </div>
-        <button
-          onClick={onReset}
-          disabled={busy}
-          className="rounded border border-line bg-panel px-3 py-1.5 text-xs text-muted transition hover:border-faint hover:text-ink disabled:opacity-40"
-        >
-          Reset sandbox
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <ThemeToggle />
+          <button
+            onClick={onReset}
+            disabled={busy}
+            className="rounded border border-line bg-panel px-3 py-1.5 text-xs text-muted transition hover:border-faint hover:text-ink disabled:opacity-40"
+          >
+            Reset sandbox
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
