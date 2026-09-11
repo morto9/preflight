@@ -291,12 +291,22 @@ export function ruleBasedConsequences(report: SimulationReport): Consequences {
   };
 }
 
-/** Never let the consequence model break a simulation. */
+/**
+ * Never let the consequence model break a simulation.
+ *
+ * The failure is logged rather than swallowed: a fallback that hides why it
+ * fired is impossible to diagnose in production, and the UI would quietly show
+ * a weaker answer with no indication anything went wrong.
+ */
 export async function consequencesFor(report: SimulationReport): Promise<Consequences> {
   if (!geminiEnabled()) return ruleBasedConsequences(report);
   try {
     return await predictConsequences(report);
-  } catch {
+  } catch (e) {
+    console.error(
+      "[preflight] consequence model failed, falling back to rules:",
+      e instanceof Error ? e.message : String(e)
+    );
     return ruleBasedConsequences(report);
   }
 }

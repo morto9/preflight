@@ -35,9 +35,13 @@ preflight.ledger_entries.**
 
 **0:30 — 0:45 · Proven versus predicted**
 
+Worth noting on camera: the left column appears in about a second, and the
+right one fills in a few seconds later.
+
 > "Everything on the left is measured. On the right is a model's guess at what
 > happens *outside* the database — customer emails from Stripe, cash-flow
 > reporting. It's labelled as a prediction and it can never block anything.
+> Notice which one arrived first: the evidence doesn't wait on the opinion.
 > That distinction is the whole product."
 
 ---
@@ -87,3 +91,13 @@ Point at the predicted-versus-actual diff.
 - The blocked → tweak → approve beat is the strongest fifteen seconds; do not rush it.
 - Cross-cut to the Stripe test dashboard if you have ten spare seconds — the
   refunds are genuinely there.
+
+## Optional: the second action
+
+If you have time for a longer cut, `Delete dormant customers` is the strongest
+non-money beat. It gets refused by a real foreign key rather than by a policy,
+and the diff shows dependent rows leaving with the customer:
+
+> "This one isn't blocked by a rule someone wrote. It's blocked by the data.
+> Postgres names the constraint, and the simulation found six dependent rows
+> nobody asked to delete. One click archives instead."
