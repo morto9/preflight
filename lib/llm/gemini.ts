@@ -59,10 +59,10 @@ function backends(): Backend[] {
   // one model being spent says nothing about the next.
   const studioKey = process.env.GEMINI_API_KEY;
   if (studioKey) {
-    const primary = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+    const primary = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
     const rest = list(
       process.env.GEMINI_MODEL_FALLBACKS,
-      "gemini-2.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash"
+      "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.6-flash,gemini-3-flash-preview"
     );
     for (const model of [...new Set([primary, ...rest])]) {
       out.push({
@@ -131,6 +131,75 @@ function failureDetail(body: string): string {
   return flat(body).slice(0, 200) || "no detail";
 }
 
+/**
+ * Models that refuse to have thinking switched off.
+ *
+ * Disabling it is an optimisation, not a requirement, and the 3.5 and 3.6
+ * generation reject `thinkingBudget` outright with a bare "invalid argument".
+ * Rather than pin a list of which models tolerate it -- the kind of list that
+ * keeps rotting here -- the first 400 teaches us, and the answer is reused for
+ * the life of the process.
+ */
+const needsThinking = new Set<string>();
+
+type Attempt = { ok: true; data: unknown } | { ok: false; failure: ModelFailure };
+
+async function callBackend(
+  backend: Backend,
+  prompt: string,
+  responseSchema: Record<string, unknown>,
+  opts: { thinking?: boolean }
+): Promise<Attempt> {
+  let suppressThinking = !opts.thinking && !needsThinking.has(backend.model);
+
+  for (;;) {
+    let res: Response;
+    try {
+      res = await fetch(backend.url, {
+        method: "POST",
+        headers: backend.headers,
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema,
+            temperature: 0.2,
+            ...(suppressThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+          },
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      return { ok: false, failure: { model: backend.label, status: null, detail } };
+    }
+
+    if (res.status === 400 && suppressThinking) {
+      needsThinking.add(backend.model);
+      suppressThinking = false;
+      continue;
+    }
+
+    if (!res.ok) {
+      const detail = failureDetail(await res.text().catch(() => ""));
+      return { ok: false, failure: { model: backend.label, status: res.status, detail } };
+    }
+
+    const json = (await res.json()) as {
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      return {
+        ok: false,
+        failure: { model: backend.label, status: res.status, detail: "returned no content" },
+      };
+    }
+
+    return { ok: true, data: JSON.parse(text) };
+  }
+}
+
 async function callGemini(
   prompt: string,
   responseSchema: Record<string, unknown>,
@@ -139,57 +208,14 @@ async function callGemini(
   const chain = backends();
   if (!chain.length) throw new Error("Neither VERTEX_API_KEY nor GEMINI_API_KEY is set");
 
-  const body: Record<string, unknown> = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema,
-      temperature: 0.2,
-      ...(opts.thinking ? {} : { thinkingConfig: { thinkingBudget: 0 } }),
-    },
-  };
-
   const failures: ModelFailure[] = [];
 
+  // Every failure is recorded and the chain keeps walking: the next entry may be
+  // a different model, or the same model behind a different key entirely.
   for (const backend of chain) {
-    let res: Response;
-    try {
-      res = await fetch(backend.url, {
-        method: "POST",
-        headers: backend.headers,
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(30_000),
-      });
-    } catch (e) {
-      failures.push({
-        model: backend.label,
-        status: null,
-        detail: e instanceof Error ? e.message : String(e),
-      });
-      continue;
-    }
-
-    // Every failure is recorded and the chain keeps walking: the next entry may
-    // be a different model, or the same model behind a different key entirely.
-    if (!res.ok) {
-      failures.push({
-        model: backend.label,
-        status: res.status,
-        detail: failureDetail(await res.text().catch(() => "")),
-      });
-      continue;
-    }
-
-    const json = (await res.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
-    };
-    const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-      failures.push({ model: backend.label, status: res.status, detail: "returned no content" });
-      continue;
-    }
-
-    return { data: JSON.parse(text), model: backend.label };
+    const attempt = await callBackend(backend, prompt, responseSchema, opts);
+    if (attempt.ok) return { data: attempt.data, model: backend.label };
+    failures.push(attempt.failure);
   }
 
   throw new GeminiUnavailable(failures);

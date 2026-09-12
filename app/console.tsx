@@ -166,9 +166,29 @@ export default function Console() {
   const [error, setError] = useState<string | null>(null);
   const [intent, setIntent] = useState("");
   const [predicting, setPredicting] = useState(false);
+  const [modelHealth, setModelHealth] = useState<ModelHealth>("unknown");
   const [live, setLive] = useState<LiveStage[]>([]);
   const [liveHalt, setLiveHalt] = useState<string | null>(null);
   const booted = useRef(false);
+
+  // Is the real decision bar on screen? The sticky twin only appears when it
+  // is not, so a reviewer who has scrolled to the bottom sees one set of
+  // buttons rather than two stacked on top of each other.
+  const actionBarRef = useRef<HTMLElement | null>(null);
+  const [actionBarVisible, setActionBarVisible] = useState(true);
+
+  useEffect(() => {
+    const el = actionBarRef.current;
+    if (!el) {
+      setActionBarVisible(true);
+      return;
+    }
+    const io = new IntersectionObserver(([entry]) => setActionBarVisible(entry.isIntersecting), {
+      rootMargin: "0px 0px -24px 0px",
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [report, grant, phase]);
 
   /**
    * Never throws.
@@ -221,8 +241,15 @@ export default function Console() {
       const c = await post<Consequences>("/api/consequences", { runId });
       // A newer simulation may have landed while the model was still thinking.
       setReport((cur) => (cur && cur.runId === runId ? { ...cur, consequences: c } : cur));
+
+      // The header badge is the only claim on this page not backed by evidence
+      // until now: it read "Gemini - consequence model" whenever a key was
+      // configured, whether or not the model could actually be reached. This is
+      // the one moment we learn the truth, so the badge learns it here.
+      setModelHealth(c.degraded ? "degraded" : c.cached ? "cached" : "live");
     } catch {
       // The prediction is advisory; failing to get one is not a failure state.
+      setModelHealth("degraded");
     } finally {
       setPredicting(false);
     }
@@ -394,8 +421,13 @@ export default function Console() {
   );
 
   return (
-    <div className="mx-auto max-w-5xl px-5 py-8 sm:px-8">
-      <Header state={state} onReset={onResetSandbox} busy={busy} />
+    <div
+      className={`mx-auto max-w-5xl px-5 py-8 sm:px-8 ${
+        // Room for the sticky decision so it never sits on top of the footer.
+        report && !grant && phase !== "executed" ? "pb-24" : ""
+      }`}
+    >
+      <Header state={state} onReset={onResetSandbox} busy={busy} modelHealth={modelHealth} />
 
       <IntentBar
         intent={intent}
@@ -442,8 +474,21 @@ export default function Console() {
               setPhase("idle");
             }}
             drift={drift}
+            ref={actionBarRef}
           />
         </div>
+      )}
+
+      {report && !busy && !grant && phase !== "executed" && (
+        <StickyDecision
+          report={report}
+          hidden={actionBarVisible}
+          onApprove={onApprove}
+          onReject={() => {
+            resetRun();
+            setPhase("idle");
+          }}
+        />
       )}
 
       {phase === "executing" && <LiveExecution stages={live} halt={liveHalt} />}
@@ -461,15 +506,56 @@ export default function Console() {
 
 /* ------------------------------------------------------------------- header */
 
+/**
+ * What the header badge is allowed to claim about the model.
+ *
+ * "unknown" until a prediction has actually been attempted -- a configured key
+ * proves nothing, as a blocked key and an out-of-credit account both look
+ * identical from the outside until you call.
+ */
+type ModelHealth = "unknown" | "live" | "cached" | "degraded";
+
+function modelBadge(health: ModelHealth): { tone: "predicted" | "neutral"; label: string; title: string } {
+  switch (health) {
+    case "live":
+      return {
+        tone: "predicted",
+        label: "Gemini · consequence model",
+        title: "The last prediction came fresh from the model.",
+      };
+    case "cached":
+      return {
+        tone: "predicted",
+        label: "Gemini · cached",
+        title: "The last prediction was real model output, served from cache.",
+      };
+    case "degraded":
+      return {
+        tone: "neutral",
+        label: "Gemini · unavailable",
+        title: "The model could not be reached. Consequences fall back to rules, and say so.",
+      };
+    default:
+      return {
+        tone: "predicted",
+        label: "Gemini · consequence model",
+        title: "A key is configured. Nothing has been asked of it yet.",
+      };
+  }
+}
+
 function Header({
   state,
   onReset,
   busy,
+  modelHealth,
 }: {
   state: State | null;
   onReset: () => void;
   busy: boolean;
+  modelHealth: ModelHealth;
 }) {
+  const model = modelBadge(modelHealth);
   return (
     <header className="mb-7">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -496,8 +582,8 @@ function Header({
         <Badge tone={state?.stripe ? "proven" : "neutral"}>
           {state?.stripe ? "Stripe test mode · live" : "Stripe off"}
         </Badge>
-        <Badge tone={state?.gemini ? "predicted" : "neutral"}>
-          {state?.gemini ? "Gemini · consequence model" : "rule-based consequences"}
+        <Badge tone={state?.gemini ? model.tone : "neutral"} title={state?.gemini ? model.title : undefined}>
+          {state?.gemini ? model.label : "rule-based consequences"}
         </Badge>
         <Badge tone="neutral">Postgres · real transactions</Badge>
         {state?.totals && (
@@ -555,7 +641,7 @@ function IntentBar({
             gemini ? "…or describe what you want to do" : "Set GEMINI_API_KEY to type free-form intents"
           }
           disabled={!gemini || busy}
-          className="min-w-0 flex-1 rounded border border-line bg-ground px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-accent/60 focus:outline-none disabled:opacity-50"
+          className="min-w-0 flex-1 rounded border border-line bg-ground px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-accent/60 disabled:opacity-50"
         />
         <button
           onClick={onFreeText}
@@ -573,7 +659,11 @@ function IntentBar({
 
 function Waiting({ text }: { text: string }) {
   return (
-    <div className="mt-6 rounded-lg border border-line bg-panel p-8 text-center">
+    <div
+      role="status"
+      aria-live="polite"
+      className="mt-6 rounded-lg border border-line bg-panel p-8 text-center"
+    >
       <div className="pulse-soft font-mono text-sm text-muted">{text}</div>
     </div>
   );
@@ -601,6 +691,75 @@ function PlanChanged({ prev, next }: { prev: SimulationReport; next: SimulationR
 
 /* --------------------------------------------------------------- action bar */
 
+/**
+ * A compact twin of the decision, pinned to the bottom of the viewport.
+ *
+ * The report is roughly 2,600px tall against a 768px viewport, which put
+ * Approve and Reject three screens below the verdict that motivates them. A
+ * reviewer had to read the evidence, scroll past all of it to act, then scroll
+ * back to check what they had just agreed to.
+ *
+ * It is aria-hidden and untabbable on purpose: this duplicates controls that
+ * remain fully present in the flow, and it exists to save a scroll, not to be
+ * a second copy of the decision for assistive technology to announce.
+ */
+function StickyDecision({
+  report,
+  hidden,
+  onApprove,
+  onReject,
+}: {
+  report: SimulationReport;
+  hidden: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const blocked = report.verdict === "blocked";
+
+  return (
+    <div
+      aria-hidden="true"
+      className={`fixed inset-x-0 bottom-0 z-30 border-t border-line bg-panel/95 backdrop-blur transition-[opacity,translate] duration-150 ${
+        hidden ? "pointer-events-none translate-y-full opacity-0" : "translate-y-0 opacity-100"
+      }`}
+    >
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3 sm:px-8">
+        <span
+          className={`font-mono text-[10px] font-semibold uppercase tracking-wider ${
+            blocked ? "text-block" : "text-proven"
+          }`}
+        >
+          {blocked ? "● Blocked" : "● Ready"}
+        </span>
+
+        <span className="min-w-0 flex-1 truncate font-mono text-sm text-ink">
+          {report.summary.moneyCents > 0
+            ? `${money(report.summary.moneyCents)} · ${report.summary.acting} orders`
+            : `${report.summary.acting} record(s)`}
+        </span>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            tabIndex={-1}
+            onClick={onReject}
+            className="rounded border border-line px-3 py-1.5 text-sm text-muted transition hover:border-faint hover:text-ink"
+          >
+            Reject
+          </button>
+          <button
+            tabIndex={-1}
+            onClick={onApprove}
+            disabled={blocked}
+            className="rounded bg-proven px-3 py-1.5 text-sm font-semibold text-ground transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            Approve
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ActionBar({
   report,
   phase,
@@ -610,6 +769,7 @@ function ActionBar({
   onDrift,
   onReject,
   drift,
+  ref,
 }: {
   report: SimulationReport;
   phase: Phase;
@@ -619,12 +779,13 @@ function ActionBar({
   onDrift: () => void;
   onReject: () => void;
   drift: string | null;
+  ref?: React.Ref<HTMLElement>;
 }) {
   const blocked = report.verdict === "blocked";
   if (phase === "executed" || phase === "executing") return null;
 
   return (
-    <section className="rounded-lg border border-line bg-panel p-4">
+    <section ref={ref} className="rounded-lg border border-line bg-panel p-4">
       {!grant ? (
         <div className="flex flex-wrap items-center gap-3">
           <button
@@ -839,7 +1000,11 @@ function LiveExecution({ stages, halt }: { stages: LiveStage[]; halt: string | n
   };
 
   return (
-    <section className="mt-6 rounded-lg border border-line bg-panel slide-up">
+    <section
+      aria-live="polite"
+      aria-label="Execution progress"
+      className="mt-6 rounded-lg border border-line bg-panel slide-up"
+    >
       <header className="flex flex-col gap-0.5 border-b border-line px-4 py-2.5 sm:flex-row sm:items-center sm:gap-2">
         <h3 className="shrink-0 text-sm font-semibold text-ink">Executing</h3>
         <span className="text-xs text-muted">

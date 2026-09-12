@@ -165,3 +165,34 @@ body {
 .slide-up {
   animation: slide-up 0.22s ease-out both;
 }
+
+/*
+  Focus.
+
+  The app previously carried exactly one focus rule, and it *removed* the
+  outline -- on the intent input, the first control a keyboard reviewer reaches.
+  Everything else fell through to the browser default: a white ring, off-palette
+  against the dark theme and nearly invisible against the light one. One accent
+  ring, at :focus-visible so a mouse click does not paint it.
+*/
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/*
+  Motion here is decoration: a report sliding in, a running stage pulsing.
+  Neither carries information the page does not also state in words, so both
+  are safe to drop entirely.
+*/
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

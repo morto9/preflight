@@ -11,9 +11,11 @@ import { money } from "@/lib/policy/invariants";
 export function Badge({
   tone,
   children,
+  title,
 }: {
   tone: "proven" | "predicted" | "block" | "warn" | "pass" | "neutral";
   children: React.ReactNode;
+  title?: string;
 }) {
   const tones: Record<string, string> = {
     proven: "bg-proven-dim text-proven border-proven/30",
@@ -25,6 +27,7 @@ export function Badge({
   };
   return (
     <span
+      title={title}
       className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider ${tones[tone]}`}
     >
       {children}
@@ -99,6 +102,8 @@ export function Verdict({ report }: { report: SimulationReport }) {
 
   return (
     <div
+      role="status"
+      aria-live="polite"
       className={`overflow-hidden rounded-xl border ${
         blocked ? "border-block/50 bg-block-dim/30" : "border-proven/50 bg-proven-dim/25"
       }`}
